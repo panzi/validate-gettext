@@ -34,6 +34,8 @@ use we only need to parse the first argument and only if it is a string literal.
 TODO
 ----
 
+Support digraphs. Won't ever support trigraphs.
+
 Support C++ custom literals. Currently they are parsed as a string/number
 literal followed by an identifier, which is probably good enough for this?
 
