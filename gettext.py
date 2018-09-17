@@ -360,8 +360,8 @@ def find_before_comma(tokens):
         if tok.tok == OPERATOR and tok.val == ',':
             return tokens[i - 1]
     if tokens[-1].tok == BRACKET and tokens[-1].val == ')':
-        return tokens[len(tokens) - 2]
-    return tokens[len(tokens) - 1]
+        return tokens[-2]
+    return tokens[-1]
 
 def validate_gettext(s, filename, func_name, valid_keys):
     try:
