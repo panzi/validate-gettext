@@ -4,6 +4,10 @@ Validate Gettext
 A very simple gettext validator for C/C++/Objective-C. I wrote this in a couple
 of hours on two days.
 
+Example output:
+
+![](https://i.imgur.com/gbimISU.png)
+
 Note
 ----
 
