@@ -141,14 +141,28 @@ def tokens(s):
         
         index = m.end()
 
-def skip(it):
-    while True:
-        item = next(it)
-        if item[4] not in (ML_COMMENT, COMMENT, SPACE):
-            return item
-
 class Node:
     __slots__ = ()
+
+    @property
+    def tok(self):
+        raise NotImplementedError
+
+    @property
+    def start(self):
+        raise NotImplementedError
+
+    @property
+    def end(self):
+        raise NotImplementedError
+
+    @property
+    def lineno(self):
+        raise NotImplementedError
+
+    @property
+    def column(self):
+        raise NotImplementedError
 
 class Atom(Node):
     __slots__ = 'start', 'end', 'lineno', 'column', 'tok', 'val'
