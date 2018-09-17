@@ -11,6 +11,11 @@ Example output:
 Note
 ----
 
+This tries to only match calls to the global `_()`. It can distinguish between
+`_()`, `::_()`, `foo._()`, `foo->_()`, and `foo::_()` and will only match the
+first two. However, it cannot detect if `_` is a local variable or a member,
+because that would require a full blown C++ parser.
+
 This doesn't correctly parse parameters that use C++ templates with multiple
 template parameters. See:
 
