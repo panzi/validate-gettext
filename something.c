@@ -1,16 +1,17 @@
 #include <stdio.h>
-
 #define FOO \
 	_("this is ignored")
-
-/* foo
- *
- * bar _(bacon)
- */
 
 void main() {
 	const char *baz;
 	_("foo\" bar \n", baz);
+
+	::_("this "
+	
+				"xxx"
+			"should be found \0 \12 \u00a0 \U0000000A \t \x20 \r\n\v\b\f", a, b, c
+	
+	);
 
 	// _(egg)
 	int i = 'f';
@@ -22,12 +23,11 @@ void main() {
 
 	(&foo)->_("so is this");
 
-	::_("this "
-	
-				"xxx"
-			"should be found \0 \12 \u00a0 \U0000000A \t \x20 \r\n\v\b\f", a, b, c
-	
-	);
+
+/* foo
+ *
+ * bar _("bacon")
+ */
 
 _(variable);
 			_();

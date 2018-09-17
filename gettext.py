@@ -322,6 +322,7 @@ def print_error(filename, s, start_tok, end_tok, message):
         normal = NORMAL
     else:
         red = blue = normal = ""
+    line_padd = 1 + len(str(end_tok.lineno + s.count('\n', end_tok.start, end_tok.end)))
     print("%s:%d:%d" % (filename, start_tok.lineno, start_tok.column), message)
     for i, line in enumerate(lines):
         if not line.strip():
@@ -335,8 +336,9 @@ def print_error(filename, s, start_tok, end_tok, message):
             end = end_tok.end - line_start
 
         mark_len = end - start
-        print('%s%6d |%s %s' % (blue, i + start_tok.lineno, normal, line.replace('\t', '    ')))
-        buf = ['%s       |%s ' % (blue, normal)]
+        slineno = str(i + start_tok.lineno)
+        print('%s%s%s |%s %s' % (blue, ' ' * (line_padd - len(slineno)), slineno, normal, line.replace('\t', '    ')))
+        buf = ['%s%s |%s ' % (blue, ' ' * line_padd, normal)]
         for i in range(0, start):
             if line[i] == '\t':
                 buf.append('    ')
