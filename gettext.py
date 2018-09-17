@@ -34,6 +34,7 @@ BRACKET = 10
 PREPROC = 11
 
 TREE = -1
+ILLEGAL = -2
 
 TOKENS = (IDENT, STRING, CHAR, ML_COMMENT, COMMENT, SPACE, OPERATOR, BRACKET, NUMBER, TAG, PREPROC)
 
@@ -104,7 +105,7 @@ def parse_strings(tokens):
     prefix = None
     for tok in tokens:
         if tok.tok != STRING:
-            raise ValueError("not a string token: %s" + tok)
+            raise SyntaxError("not a string token: %s" + tok)
         p, val = parse_string(tok.val)
         if prefix is None:
             prefix = p
@@ -120,6 +121,9 @@ def tokens(s):
     column = 1
     while index < n:
         m = LEX.match(s, index)
+
+        if not m:
+            raise ParserError(lineno, column, index, index + 1, 'a valid token', s[index:index + 1])
 
         for TOK in TOKENS:
             val = m.group(TOK)
@@ -194,8 +198,7 @@ class Tree(Node):
 
 class ParserError(Exception):
     def __init__(self, lineno, column, start, end, expected, got):
-        Exception.__init__(self, "line %d column %d: expected %s, but got %s" % (
-            lineno, column, expected, got))
+        Exception.__init__(self, "expected %s, but got %s" % (expected, got))
         self.lineno = lineno
         self.column = column
         self.start = start
@@ -269,21 +272,29 @@ def join_tokens(tokens):
     return ''.join(buf)
 
 def print_gettext(s, func_name='_'):
-    for ident_tok, args_tok in gettext(s, func_name):
-        print('gettext at line %d column %d: _%s' % (ident_tok.lineno, ident_tok.column,
-            join_tokens(args_tok.tokens)))
+    try:
+        for ident_tok, args_tok in gettext(s, func_name):
+            print('gettext at line %d column %d: _%s' % (ident_tok.lineno, ident_tok.column,
+                join_tokens(args_tok.tokens)))
 
-        args = parse_comma_list(args_tok.tokens[1:-1])
-        if not args:
-            print("\tNO ARGUMENTS!")
-        else:
-            arg0 = args[0]
-            if arg0.is_strings():
-                arg0 = parse_strings(arg0.tokens)
-                print("\tparsed format argument: %r" % arg0)
-            for argind, arg in enumerate(args):
-                print("\targ %d: %s" % (argind, arg))
-        print()
+            args = parse_comma_list(args_tok.tokens[1:-1])
+            if not args:
+                print("\tNO ARGUMENTS!")
+            else:
+                arg0 = args[0]
+                if arg0.is_strings():
+                    try:
+                        arg0 = parse_strings(arg0.tokens)
+                    except SyntaxError as e:
+                        raise ParserError(arg0.lineno, arg0.column, arg0.start, arg0.end, "string literal", s[arg0.start:arg0.end])
+                    else:
+                        print("\tparsed format argument: %r" % arg0)
+                for argind, arg in enumerate(args):
+                    print("\targ %d: %s" % (argind, arg))
+            print()
+    except ParserError as e:
+        illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
+        print_error(filename, s, illegal, illegal, str(e))
 
 RED = "\x1b[31m"
 BLUE = "\x1b[34m"
@@ -337,18 +348,25 @@ def find_before_comma(tokens):
     return tokens[len(tokens) - 1]
 
 def validate_gettext(s, filename, func_name, valid_keys):
-    for ident_tok, args_tok in gettext(s, func_name):
-        args = parse_comma_list(args_tok.tokens[1:-1])
-        if not args:
-            print_error(filename, s, ident_tok, args_tok, "no arguments")
-        else:
-            arg0 = args[0]
-            if arg0.is_strings():
-                arg0 = parse_strings(arg0.tokens)
-                if arg0 not in valid_keys:
-                    print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a know string reference")
+    try:
+        for ident_tok, args_tok in gettext(s, func_name):
+            args = parse_comma_list(args_tok.tokens[1:-1])
+            if not args:
+                print_error(filename, s, ident_tok, args_tok, "no arguments")
             else:
-                print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a string literal")
+                arg0 = args[0]
+                if arg0.is_strings():
+                    try:
+                        arg0 = parse_strings(arg0.tokens)
+                    except SyntaxError as e:
+                        raise ParserError(arg0.lineno, arg0.column, arg0.start, arg0.end, "string literal", s[arg0.start:arg0.end])
+                    if arg0 not in valid_keys:
+                        print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a know string reference")
+                else:
+                    print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a string literal")
+    except ParserError as e:
+        illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
+        print_error(filename, s, illegal, illegal, str(e))
 
 def gettext(s, func_name='_'):
     node = parse(s)
