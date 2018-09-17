@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import re
+import sys
 import string
 
 WORD_CHARS = frozenset(string.ascii_letters + string.digits)
@@ -169,6 +170,22 @@ class Tree(Node):
     def __str__(self):
         return join_tokens(self.tokens)
 
+    @property
+    def start(self):
+        return self.tokens[0].start
+
+    @property
+    def end(self):
+        return self.tokens[-1].end
+
+    @property
+    def lineno(self):
+        return self.tokens[0].lineno
+
+    @property
+    def column(self):
+        return self.tokens[0].column
+
     def is_strings(self):
         for tok in self.tokens:
             if tok.tok != STRING:
@@ -251,9 +268,91 @@ def join_tokens(tokens):
         i += 1
     return ''.join(buf)
 
+def print_gettext(s, func_name='_'):
+    for ident_tok, args_tok in gettext(s, func_name):
+        print('gettext at line %d column %d: _%s' % (ident_tok.lineno, ident_tok.column,
+            join_tokens(args_tok.tokens)))
+
+        args = parse_comma_list(args_tok.tokens[1:-1])
+        if not args:
+            print("\tNO ARGUMENTS!")
+        else:
+            arg0 = args[0]
+            if arg0.is_strings():
+                arg0 = parse_strings(arg0.tokens)
+                print("\tparsed format argument: %r" % arg0)
+            for argind, arg in enumerate(args):
+                print("\targ %d: %s" % (argind, arg))
+        print()
+
+RED = "\x1b[31m"
+BLUE = "\x1b[34m"
+NORMAL = "\x1b[0m"
+
+def print_error(filename, s, start_tok, end_tok, message):
+    lines = s.split('\n')[start_tok.lineno - 1:end_tok.lineno]
+    if sys.stdout.isatty():
+        red = RED
+        blue = BLUE
+        normal = NORMAL
+    else:
+        red = blue = normal = ""
+    print("%s:%d:%d" % (filename, start_tok.lineno, start_tok.column), message)
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        start = 0 if i > 0 else start_tok.column - 1
+        
+        if i + 1 < len(lines):
+            end = len(line)
+        else:
+            line_start = s.rfind('\n', 0, end_tok.end) + 1
+            end = end_tok.end - line_start
+
+        mark_len = end - start
+        print('%s%6d |%s %s' % (blue, i + start_tok.lineno, normal, line.replace('\t', '    ')))
+        buf = ['%s       |%s ' % (blue, normal)]
+        for i in range(0, start):
+            if line[i] == '\t':
+                buf.append('    ')
+            else:
+                buf.append(' ')
+        buf.append(red)
+        for i in range(start, start + max(mark_len, 1)):
+            if line[i] == '\t':
+                buf.append('^^^^')
+            else:
+                buf.append('^')
+        buf.append(normal)
+        print(''.join(buf))
+    print()
+
+# only to be used on a comma list in parenthesis
+def find_before_comma(tokens):
+    for i, tok in enumerate(tokens):
+        if tok.tok == OPERATOR and tok.val == ',':
+            return tokens[i - 1]
+    if tokens[-1].tok == BRACKET and tokens[-1].val == ')':
+        return tokens[len(tokens) - 2]
+    return tokens[len(tokens) - 1]
+
+def validate_gettext(s, filename, func_name, valid_keys):
+    for ident_tok, args_tok in gettext(s, func_name):
+        args = parse_comma_list(args_tok.tokens[1:-1])
+        if not args:
+            print_error(filename, s, ident_tok, args_tok, "no arguments")
+        else:
+            arg0 = args[0]
+            if arg0.is_strings():
+                arg0 = parse_strings(arg0.tokens)
+                if arg0 not in valid_keys:
+                    print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a know string reference")
+            else:
+                print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a string literal")
+
 def gettext(s, func_name='_'):
     node = parse(s)
-    _gettext(node, func_name)
+    yield from _gettext(node, func_name)
 
 def _gettext(node, func_name):
     i = 0
@@ -279,28 +378,20 @@ def _gettext(node, func_name):
             if child.val == func_name and i + 1 < len(node.tokens) and node.tokens[i + 1].tok == TREE:
                 next_child = node.tokens[i + 1]
                 if next_child.tokens[0].val == '(':
-                    print('gettext at line %d column %d: _%s' % (child.lineno, child.column,
-                        join_tokens(next_child.tokens)))
-
-                    args = parse_comma_list(next_child.tokens[1:-1])
-                    if not args:
-                        print("\tNO ARGUMENTS!")
-                    else:
-                        arg0 = args[0]
-                        if arg0.is_strings():
-                            arg0 = parse_strings(arg0.tokens)
-                            print("\tparsed format argument: %r" % arg0)
-                        for argind, arg in enumerate(args):
-                            print("\targ %d: %s" % (argind, arg))
-                    print()
+                    yield child, next_child
                     i += 1
                 
         elif child.tok == TREE:
-            _gettext(child)
+            yield from _gettext(child, func_name)
         i += 1
 
 if __name__ == '__main__':
-    import sys
     with open(sys.argv[1]) as fp:
+        known = set(fp)
+    if '' in known:
+        known.remove('')
+    filename = sys.argv[2]
+    with open(filename) as fp:
         s = fp.read()
-    gettext(s)
+    #print_gettext(s, '_')
+    validate_gettext(s, filename, '_', known)
