@@ -6,6 +6,20 @@ import string
 
 WORD_CHARS = frozenset(string.ascii_letters + string.digits)
 
+# XXX: This doesn't correctly parse parameters that use C++ templates with
+#      multiple template parameters. See:
+#
+#      _("foo bar baz", std::pair<int, int>(1, 2), 123)
+#        ^- 1st arg     ^- 2nd arg     ^- 3rd arg  ^- 4th arg
+#
+#      However, if its enclosed in paranthesis it works:
+#
+#      _("foo bar baz", (std::pair<int, int>(1, 2)), 123)
+#        ^- 1st arg     ^- 2nd arg                   ^- 3rd arg
+#
+#      A full blown C++ parser would need to have type informations in order
+#      to _parse_ such code. I won't write a full blown C++ parser.
+
 # TODO: support new C++ custom literals
 LEX = re.compile(
     r'((?i:(?:[LuU]|u8)?"(?:[^"\n\\]|\\[?"'+"'"+r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*"|R"[^\n"]*"))|' + # string
