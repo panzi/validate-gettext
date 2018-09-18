@@ -133,7 +133,7 @@ def parse_strings(tokens):
         if prefix is None:
             prefix = p
         elif p is not None and p != prefix:
-            raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column, tok.start, tok.end, _prefix_msg(prefix), _prefix_msg(p))
+            raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column, _prefix_msg(prefix), _prefix_msg(p))
         buf.append(val)
     return ''.join(buf)
 
@@ -146,7 +146,7 @@ def tokens(s):
         m = LEX.match(s, index)
 
         if not m:
-            raise UnexpectedTokenError(lineno, column, lineno, column + 1, index, index + 1, 'a valid token', s[index:index + 1])
+            raise UnexpectedTokenError(lineno, column, lineno, column + 1, 'a valid token', s[index:index + 1])
 
         val = m.group(0)
         newlines = val.count("\n")
@@ -160,9 +160,9 @@ def tokens(s):
         for TOK in TOKENS:
             val = m.group(TOK)
             if val is not None:
-                yield Atom(m.start(), m.end(), lineno, column, end_lineno, end_column, TOK, val)
+                yield Atom(lineno, column, end_lineno, end_column, TOK, val)
                 break
-        
+
         lineno = end_lineno
         column = end_column
 
@@ -173,14 +173,6 @@ class Node:
 
     @property
     def tok(self):
-        raise NotImplementedError
-
-    @property
-    def start(self):
-        raise NotImplementedError
-
-    @property
-    def end(self):
         raise NotImplementedError
 
     @property
@@ -199,12 +191,16 @@ class Node:
     def end_column(self):
         raise NotImplementedError
 
-class Atom(Node):
-    __slots__ = 'start', 'end', 'lineno', 'column', 'end_lineno', 'end_column', 'tok', 'val'
+    def slice(self, lines):
+        return slice_lines(lines, self.lineno, self.column, self.end_lineno, self.end_column)
 
-    def __init__(self, start, end, lineno, column, end_lineno, end_column, tok, val):
-        self.start = start
-        self.end = end
+    def str_slice(self, lines):
+        return ''.join(self.slice(lines))
+
+class Atom(Node):
+    __slots__ = 'lineno', 'column', 'end_lineno', 'end_column', 'tok', 'val'
+
+    def __init__(self, lineno, column, end_lineno, end_column, tok, val):
         self.lineno = lineno
         self.column = column
         self.end_lineno = end_lineno
@@ -224,14 +220,6 @@ class Tree(Node):
 
     def __str__(self):
         return join_tokens(self.tokens)
-
-    @property
-    def start(self):
-        return self.tokens[0].start
-
-    @property
-    def end(self):
-        return self.tokens[-1].end
 
     @property
     def lineno(self):
@@ -256,34 +244,42 @@ class Tree(Node):
         return True
 
 class ParserError(Exception):
-    def __init__(self, lineno, column, end_lineno, end_column, start, end, message):
+    def __init__(self, lineno, column, end_lineno, end_column, message):
         Exception.__init__(self, message)
         self.lineno = lineno
         self.column = column
         self.end_lineno = end_lineno
         self.end_column = end_column
-        self.start  = start
-        self.end    = end
+
+    def slice(self, lines):
+        return slice_lines(lines, self.lineno, self.column, self.end_lineno, self.end_column)
+
+    def str_slice(self, lines):
+        return ''.join(self.slice(lines))
 
 class UnexpectedTokenError(ParserError):
-    def __init__(self, lineno, column, end_lineno, end_column, start, end, expected, got):
-        ParserError.__init__(self, lineno, column, end_lineno, end_column, start, end,
+    def __init__(self, lineno, column, end_lineno, end_column, expected, got):
+        ParserError.__init__(self, lineno, column, end_lineno, end_column,
             "expected %s, but got %s" % (expected, got))
         self.expected = expected
         self.got = got
 
 class UnbalancedParenthesisError(ParserError):
-    def __init__(self, lineno, column, end_lineno, end_column, start, end,
-            other_lineno, other_column, other_end_lineno, other_end_column, other_start, other_end,
+    def __init__(self, lineno, column, end_lineno, end_column,
+            other_lineno, other_column, other_end_lineno, other_end_column,
             expected, got):
-        ParserError.__init__(self, lineno, column, end_lineno, end_column, start, end,
+        ParserError.__init__(self, lineno, column, end_lineno, end_column,
             "expected %s, but got %s" % (expected, got))
         self.other_lineno = other_lineno
         self.other_column = other_column
         self.other_end_lineno = other_end_lineno
         self.other_end_column = other_end_column
-        self.other_start  = other_start
-        self.other_end    = other_end
+
+    def other_slice(self, lines):
+        return slice_lines(lines, self.other_lineno, self.other_column, self.other_end_lineno, self.other_end_column)
+
+    def other_str_slice(self, lines):
+        return ''.join(self.other_slice(lines))
 
 def parse(s):
     node = Tree()
@@ -306,26 +302,26 @@ def parse(s):
                 other = node.tokens[0]
                 if other.tok != BRACKET:
                     raise ParserError(
-                        child.lineno, child.column, child.end_lineno, child.end_column, child.start, child.end,
+                        child.lineno, child.column, child.end_lineno, child.end_column,
                         'unexpected %s' % val)
                 if val in CLOSE_BRACKETS and val != CLOSE_BRACKET_MAP[other.val]:
                     raise UnbalancedParenthesisError(
-                        child.lineno, child.column, child.end_lineno, child.end_column, child.start, child.end,
-                        other.lineno, other.column, other.end_lineno, other.end_column, other.start, other.end,
+                        child.lineno, child.column, child.end_lineno, child.end_column,
+                        other.lineno, other.column, other.end_lineno, other.end_column,
                         CLOSE_BRACKET_MAP[other.val], val)
                 node = stack.pop()
         else:
             node.tokens.append(atom)
 
     if stack:
+        lines = split_lines(s)
         tree = find_last_tree(stack[-1])
-        end = len(s)
-        lineno = s.count('\n') + 1
-        column = end - s.rfind('\n')
+        lineno = len(lines) + 1
+        column = len(lines[-1])
         other = tree.tokens[0]
         raise UnbalancedParenthesisError(
-            lineno, column, lineno, column + 1, end, end + 1,
-            other.lineno, other.column, other.end_lineno, other.end_column, other.start, other.end,
+            lineno, column, lineno, column + 1,
+            other.lineno, other.column, other.end_lineno, other.end_column,
             CLOSE_BRACKET_MAP[other.val], 'end of file')
 
     return node
@@ -368,7 +364,25 @@ def join_tokens(tokens):
         i += 1
     return ''.join(buf)
 
-def print_gettext(s, func_name='_'):
+def slice_lines(lines, start_lineno, start_column, end_lineno, end_column):
+    buf = []
+    for i in range(start_lineno, end_lineno + 1):
+        if i == end_lineno:
+            buf.append(lines[i][start_column - 1 : end_column - 1])
+        else:
+            buf.append(lines[i][start_column - 1:])
+        start_column = 0
+    return buf
+
+def split_lines(s):
+    if s.endswith("\n"):
+        s = s[:-1]
+    lines = s.split("\n")
+    if not lines:
+        lines.append("")
+    return lines
+
+def print_gettext(s, filename, func_name='_'):
     try:
         for ident_tok, args_tok in gettext(s, func_name):
             print('gettext at line %d column %d: _%s' % (ident_tok.lineno, ident_tok.column,
@@ -383,22 +397,24 @@ def print_gettext(s, func_name='_'):
                     try:
                         arg0 = parse_strings(arg0.tokens)
                     except SyntaxError as e:
-                        raise ParserError(arg0.lineno, arg0.column, arg0.end_lineno, arg0.end_column, arg0.start, arg0.end, str(e))
+                        raise ParserError(arg0.lineno, arg0.column, arg0.end_lineno, arg0.end_column, str(e))
                     else:
                         print("\tparsed format argument: %r" % arg0)
                 for argind, arg in enumerate(args):
                     print("\targ %d: %s" % (argind, arg))
             print()
     except UnbalancedParenthesisError as e:
-        illegal = Atom(e.start, e.end, e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, s[e.start:e.end])
-        print_errors(filename, s, [illegal], str(e))
+        lines = split_lines(s)
+        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+        print_mark(filename, lines, [illegal], str(e))
 
-        illegal = Atom(e.other_start, e.other_end, e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, s[e.other_start:e.other_end])
-        print_errors(filename, s, [illegal], "open bracket was here")
+        illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
+        print_mark(filename, lines, [illegal], "open bracket was here")
 
     except ParserError as e:
-        illegal = Atom(e.start, e.end, e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, s[e.start:e.end])
-        print_errors(filename, s, [illegal], str(e))
+        lines = split_lines(s)
+        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+        print_mark(filename, lines, [illegal], str(e))
 
 RED = "\x1b[31m"
 BLUE = "\x1b[34m"
@@ -442,13 +458,12 @@ class LineInfo:
             i += 1
         self.ranges.append([start, end])
 
-def gather_lines(s, toks):
-    lines = s.split('\n')
+def gather_lines(lines, toks):
     line_infos = {}
     for tok in toks:
-        start_line = tok.lineno
-        end_line = start_line + s.count('\n', tok.start, tok.end)
-        for lineno in range(start_line, end_line + 1):
+        start_lineno = tok.lineno
+        end_lineno = tok.end_lineno
+        for lineno in range(start_lineno, end_lineno + 1):
             if lineno in line_infos:
                 info = line_infos[lineno]
                 line = info.line
@@ -457,33 +472,30 @@ def gather_lines(s, toks):
                 line = lines[line_index]
                 info = LineInfo(lineno, line)
                 line_infos[lineno] = info
-            
-            start = 0 if lineno > start_line else tok.column - 1
 
-            if lineno < end_line:
+            start = 0 if lineno > start_lineno else tok.column - 1
+
+            if lineno < end_lineno:
                 end = len(line)
             else:
-                line_start = s.rfind('\n', 0, tok.end) + 1
-                end = tok.end - line_start
-            
+                end = tok.end_column - 1
+
             info.add_range(start, end)
     return [line_infos[lineno] for lineno in sorted(line_infos)]
 
-def print_errors(fielname, s, toks, message):
+def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE):
     if sys.stdout.isatty():
-        red = RED
-        blue = BLUE
         normal = NORMAL
     else:
-        red = blue = normal = ""
-    line_padd = 1 + len(str(toks[-1].lineno + s.count('\n', toks[-1].start, toks[-1].end)))
+        mark_color = lineno_color = normal = ""
+    line_padd = 1 + len(str(toks[-1].end_lineno))
     print("%s:%d:%d" % (filename, toks[0].lineno, toks[0].column), message)
-    infos = gather_lines(s, toks)
+    infos = gather_lines(lines, toks)
     for info in infos:
         line = info.line
         str_lineno = str(info.lineno)
-        print('%s%s%s |%s %s' % (blue, ' ' * (line_padd - len(str_lineno)), str_lineno, normal, line.replace('\t', '    ')))
-        buf = ['%s%s |%s ' % (blue, ' ' * line_padd, normal)]
+        print('%s%s%s |%s %s' % (lineno_color, ' ' * (line_padd - len(str_lineno)), str_lineno, normal, line.replace('\t', '    ')))
+        buf = ['%s%s |%s ' % (lineno_color, ' ' * line_padd, normal)]
         prev = 0
         for start, end in info.ranges:
             for i in range(prev, start):
@@ -491,7 +503,7 @@ def print_errors(fielname, s, toks, message):
                     buf.append('    ')
                 else:
                     buf.append(' ')
-            buf.append(red)
+            buf.append(mark_color)
             for i in range(start, max(end, start + 1)):
                 if i < len(line) and line[i] == '\t':
                     buf.append('^^^^')
@@ -503,32 +515,33 @@ def print_errors(fielname, s, toks, message):
     print()
 
 def validate_gettext(s, filename, func_name, valid_keys):
+    lines = split_lines(s)
     try:
         for ident_tok, args_tok in gettext(s, func_name):
             args = parse_comma_list(args_tok.tokens[1:-1])
             if not args:
-                print_errors(filename, s, [ident_tok, args_tok], "no arguments")
+                print_mark(filename, lines, [ident_tok, args_tok], "no arguments")
             else:
                 arg0 = args[0]
                 if arg0.is_strings():
                     try:
                         str_arg0 = parse_strings(arg0.tokens)
                     except SyntaxError as e:
-                        raise ParserError(arg0.lineno, arg0.column, arg0.end_lineno, arg0.end_column, arg0.start, arg0.end, str(e))
+                        raise ParserError(arg0.lineno, arg0.column, arg0.end_lineno, arg0.end_column, str(e))
                     if str_arg0 not in valid_keys:
-                        print_errors(filename, s, arg0.tokens, "not a know string reference")
+                        print_mark(filename, lines, arg0.tokens, "not a know string reference")
                 else:
-                    print_errors(filename, s, arg0.tokens, "not a string literal")
+                    print_mark(filename, lines, arg0.tokens, "not a string literal")
     except UnbalancedParenthesisError as e:
-        illegal = Atom(e.start, e.end, e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, s[e.start:e.end])
-        print_errors(filename, s, [illegal], str(e))
+        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+        print_mark(filename, lines, [illegal], str(e))
 
-        illegal = Atom(e.other_start, e.other_end, e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, s[e.other_start:e.other_end])
-        print_errors(filename, s, [illegal], "open bracket was here")
+        illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
+        print_mark(filename, lines, [illegal], "open bracket was here", mark_color=BLUE)
 
     except ParserError as e:
-        illegal = Atom(e.start, e.end, e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, s[e.start:e.end])
-        print_errors(filename, s, [illegal], str(e))
+        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+        print_mark(filename, lines, [illegal], str(e))
 
 def gettext(s, func_name='_'):
     node = parse(s)
@@ -565,13 +578,15 @@ def _gettext(node, func_name):
             yield from _gettext(child, func_name)
         i += 1
 
-if __name__ == '__main__':
-    with open(sys.argv[1]) as fp:
+def main(known_keys='known_keys.txt', source='something.c', func_name='_'):
+    with open(known_keys) as fp:
         known = set(line.rstrip('\n') for line in fp)
     if '' in known:
         known.remove('')
-    filename = sys.argv[2]
-    with open(filename) as fp:
+    with open(source) as fp:
         s = fp.read()
-    #print_gettext(s, '_')
-    validate_gettext(s, filename, '_', known)
+    #print_gettext(s, source, func_name)
+    validate_gettext(s, source, func_name, known)
+
+if __name__ == '__main__':
+    main(*sys.argv[1:])
