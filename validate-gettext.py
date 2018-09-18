@@ -499,7 +499,7 @@ def gather_lines(lines, toks, before=0, after=0):
     
     for info in list(line_infos.values()):
         if before > 0:
-            for lineno in range(max(info.lineno - before, 0), info.lineno):
+            for lineno in range(max(info.lineno - before, 1), info.lineno):
                 if lineno not in line_infos:
                     line_infos[lineno] = LineInfo(lineno, lines[lineno - 1])
 
