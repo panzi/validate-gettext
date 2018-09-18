@@ -306,7 +306,10 @@ def parse(s):
                 node = child
             else:
                 child = atom
-                node.tokens.append(child)
+                if not node.tokens:
+                    raise ParserError(
+                        child.lineno, child.column, child.end_lineno, child.end_column,
+                        'unexpected %s' % val)
                 other = node.tokens[0]
                 if other.tok != BRACKET:
                     raise ParserError(
@@ -317,6 +320,7 @@ def parse(s):
                         child.lineno, child.column, child.end_lineno, child.end_column,
                         other.lineno, other.column, other.end_lineno, other.end_column,
                         CLOSE_BRACKET_MAP[other.val], val)
+                node.tokens.append(child)
                 node = stack.pop()
         else:
             node.tokens.append(atom)
@@ -427,6 +431,7 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, 
                 else:
                     print_mark(filename, lines, arg0.tokens, "not a string literal", before=before, after=after, color=color)
                     ok = False
+
     except UnbalancedParenthesisError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
         print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
@@ -434,6 +439,12 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, 
         illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
         print_mark(filename, lines, [illegal], "open bracket was here", before=before, after=after, color=color)
         ok = False
+
+    except ParserError as e:
+        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+        print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
+        ok = False
+
     return ok
 
 class LineInfo:
