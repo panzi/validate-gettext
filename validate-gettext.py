@@ -392,46 +392,46 @@ def split_lines(s):
         lines.append("")
     return lines
 
-def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, before=0, after=0):
+def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, before=0, after=0, color=True):
     lines = split_lines(s)
     ok = True
     try:
         for ident_tok, args_tok in gettext(s, func_name):
             args = parse_comma_list(args_tok.tokens[1:-1])
             if not args:
-                print_mark(filename, lines, [ident_tok, args_tok], "no arguments", before=before, after=after)
+                print_mark(filename, lines, [ident_tok, args_tok], "no arguments", before=before, after=after, color=color)
             else:
                 arg0 = args[0]
                 if arg0.is_strings():
                     try:
                         arg0_str = parse_strings(arg0.tokens)
                     except SyntaxError as e:
-                        print_mark(filename, lines, arg0.tokens, str(e), before=before, after=after)
+                        print_mark(filename, lines, arg0.tokens, str(e), before=before, after=after, color=color)
                         ok = False
                     except ParserError as e:
                         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
-                        print_mark(filename, lines, [illegal], str(e), before=before, after=after)
+                        print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
                         ok = False
                     else:
                         if arg0_str not in valid_keys:
-                            print_mark(filename, lines, arg0.tokens, "not a know string key", before=before, after=after)
+                            print_mark(filename, lines, arg0.tokens, "not a know string key", before=before, after=after, color=color)
                             ok = False
                         elif not only_errors:
                             print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation",
-                                mark_color=GREEN, before=before, after=after)
+                                mark_color=GREEN, before=before, after=after, color=color)
                             print("\tparsed format argument: %r" % arg0_str)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
                 else:
-                    print_mark(filename, lines, arg0.tokens, "not a string literal", before=before, after=after)
+                    print_mark(filename, lines, arg0.tokens, "not a string literal", before=before, after=after, color=color)
                     ok = False
     except UnbalancedParenthesisError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e), before=before, after=after)
+        print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
 
         illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
-        print_mark(filename, lines, [illegal], "open bracket was here", before=before, after=after)
+        print_mark(filename, lines, [illegal], "open bracket was here", before=before, after=after, color=color)
         ok = False
     return ok
 
@@ -510,8 +510,8 @@ def gather_lines(lines, toks, before=0, after=0):
 
     return [line_infos[lineno] for lineno in sorted(line_infos)]
 
-def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE, before=0, after=0):
-    if sys.stdout.isatty():
+def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
+    if color:
         normal = NORMAL
     else:
         mark_color = lineno_color = normal = ""
@@ -596,6 +596,7 @@ def main(args):
     parser.add_argument('--only-errors', default=False, action='store_true')
     parser.add_argument('--before', type=int, default=0)
     parser.add_argument('--after', type=int, default=0)
+    parser.add_argument('--color', choices=['always', 'never', 'auto'], default='auto')
     opts = parser.parse_args(args)
 
     with open(opts.valid_keys) as fp:
@@ -603,6 +604,11 @@ def main(args):
 
     if '' in valid_keys:
         valid_keys.remove('')
+
+    if opts.color == 'auto':
+        color = sys.stdout.isatty()
+    else:
+        color = opts.color == 'always'
 
     status = 0
     for source in opts.source:
@@ -612,7 +618,8 @@ def main(args):
                 func_name = opts.func_name,
                 only_errors = opts.only_errors,
                 before = opts.before,
-                after = opts.after):
+                after = opts.after,
+                color = color):
             status = 1
     return status
 
