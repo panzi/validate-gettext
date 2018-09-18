@@ -6,6 +6,15 @@ import string
 
 WORD_CHARS = frozenset(string.ascii_letters + string.digits)
 
+CLOSE_BRACKET_MAP = {
+    "(": ")",
+    "[": "]",
+    "{": "}"
+}
+
+OPEN_BRACKETS  = frozenset(CLOSE_BRACKET_MAP.keys())
+CLOSE_BRACKETS = frozenset(CLOSE_BRACKET_MAP.values())
+
 # XXX: This doesn't correctly parse parameters that use C++ templates with
 #      multiple template parameters. See:
 #
@@ -86,7 +95,7 @@ def _parse_string_repl(m):
 def parse_string(val):
     if not val.endswith('"'):
         # TODO: C++ custom string literals
-        raise SyntaxError(val)
+        raise SyntaxError('illegal string literal: ' + val)
 
     if val.startswith('u8"'):
         prefix = 'u8'
@@ -106,8 +115,8 @@ def parse_string(val):
         prefix = ''
         s = val[1:-1]
     else:
-        raise SyntaxError(val)
-    
+        raise SyntaxError('illegal string literal: ' + val)
+
     return prefix, STR_PART.sub(_parse_string_repl, s)
 
 def _prefix_msg(prefix):
@@ -124,7 +133,7 @@ def parse_strings(tokens):
         if prefix is None:
             prefix = p
         elif p != prefix:
-            raise ParserError(tok.lineno, tok.column, tok.start, tok.end, _prefix_msg(prefix), _prefix_msg(p))
+            raise UnexpectedTokenError(tok.lineno, tok.column, tok.start, tok.end, _prefix_msg(prefix), _prefix_msg(p))
         buf.append(val)
     return ''.join(buf)
 
@@ -137,14 +146,14 @@ def tokens(s):
         m = LEX.match(s, index)
 
         if not m:
-            raise ParserError(lineno, column, index, index + 1, 'a valid token', s[index:index + 1])
+            raise UnexpectedTokenError(lineno, column, index, index + 1, 'a valid token', s[index:index + 1])
 
         for TOK in TOKENS:
             val = m.group(TOK)
             if val is not None:
                 yield (m.start(), m.end(), lineno, column, TOK, val)
                 break
- 
+
         val = m.group(0)
         newlines = val.count("\n")
         if newlines > 0:
@@ -152,7 +161,7 @@ def tokens(s):
             column = len(val) - val.rfind("\n")
         else:
             column += len(val)
-        
+
         index = m.end()
 
 class Node:
@@ -225,14 +234,30 @@ class Tree(Node):
         return True
 
 class ParserError(Exception):
-    def __init__(self, lineno, column, start, end, expected, got):
-        Exception.__init__(self, "expected %s, but got %s" % (expected, got))
+    def __init__(self, lineno, column, start, end, message):
+        Exception.__init__(self, message)
         self.lineno = lineno
         self.column = column
-        self.start = start
-        self.end = end
+        self.start  = start
+        self.end    = end
+
+class UnexpectedTokenError(ParserError):
+    def __init__(self, lineno, column, start, end, expected, got):
+        ParserError.__init__(self, lineno, column, start, end,
+            "expected %s, but got %s" % (expected, got))
         self.expected = expected
         self.got = got
+
+class UnbalancedParenthesisError(ParserError):
+    def __init__(self, lineno, column, start, end,
+            other_lineno, other_column, other_start, other_end,
+            expected, got):
+        ParserError.__init__(self, lineno, column, start, end,
+            "expected %s, but got %s" % (expected, got))
+        self.other_lineno = other_lineno
+        self.other_column = other_column
+        self.other_start  = other_start
+        self.other_end    = other_end
 
 def parse(s):
     node = Tree()
@@ -244,7 +269,7 @@ def parse(s):
 
         if tok == BRACKET:
             val = item[5]
-            if val in "[({":
+            if val in OPEN_BRACKETS:
                 stack.append(node)
                 child = Tree()
                 child.tokens.append(Atom(*item))
@@ -253,22 +278,41 @@ def parse(s):
             else:
                 child = Atom(*item)
                 node.tokens.append(child)
-                start = node.tokens[0].val
-                if start == '(':
-                    if child.val != ')':
-                        raise ParserError(child.lineno, child.column, child.start, child.end, ')', child.val)
-                elif start == '{':
-                    if child.val != '}':
-                        raise ParserError(child.lineno, child.column, child.start, child.end, '}', child.val)
-                elif start == '[':
-                    if child.val != ']':
-                        raise ParserError(child.lineno, child.column, child.start, child.end, ']', child.val)
-
+                other = node.tokens[0]
+                if other.tok != BRACKET:
+                    raise ParserError(
+                        child.lineno, child.column, child.start, child.end,
+                        'unexpected %s' % val)
+                if val in CLOSE_BRACKETS and val != CLOSE_BRACKET_MAP[other.val]:
+                    raise UnbalancedParenthesisError(
+                        child.lineno, child.column, child.start, child.end,
+                        other.lineno, other.column, other.start, other.end,
+                        CLOSE_BRACKET_MAP[other.val], val)
                 node = stack.pop()
         else:
             node.tokens.append(Atom(*item))
 
+    if stack:
+        tree = find_last_tree(stack[-1])
+        end = len(s)
+        lineno = s.count('\n') + 1
+        column = end - s.rfind('\n')
+        other = tree.tokens[0]
+        raise UnbalancedParenthesisError(
+            lineno, column, end, end + 1,
+            other.lineno, other.column, other.start, other.end,
+            CLOSE_BRACKET_MAP[other.val], 'end of file')
+
     return node
+
+def find_last_tree(node):
+    while True:
+        if not node.tokens:
+            return node
+        child = node.tokens[-1]
+        if child.tok != TREE:
+            return node
+        node = child
 
 def parse_comma_list(tokens):
     parsed = []
@@ -314,12 +358,19 @@ def print_gettext(s, func_name='_'):
                     try:
                         arg0 = parse_strings(arg0.tokens)
                     except SyntaxError as e:
-                        raise ParserError(arg0.lineno, arg0.column, arg0.start, arg0.end, "string literal", s[arg0.start:arg0.end])
+                        raise ParserError(arg0.lineno, arg0.column, arg0.start, arg0.end, str(e))
                     else:
                         print("\tparsed format argument: %r" % arg0)
                 for argind, arg in enumerate(args):
                     print("\targ %d: %s" % (argind, arg))
             print()
+    except UnbalancedParenthesisError as e:
+        illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
+        print_errors(filename, s, [illegal], str(e))
+
+        illegal = Atom(e.other_start, e.other_end, e.other_lineno, e.other_column, ILLEGAL, s[e.other_start:e.other_end])
+        print_errors(filename, s, [illegal], "open bracket was here")
+
     except ParserError as e:
         illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
         print_errors(filename, s, [illegal], str(e))
@@ -411,13 +462,13 @@ def print_errors(fielname, s, toks, message):
         prev = 0
         for start, end in info.ranges:
             for i in range(prev, start):
-                if line[i] == '\t':
+                if i < len(line) and line[i] == '\t':
                     buf.append('    ')
                 else:
                     buf.append(' ')
             buf.append(red)
-            for i in range(start, end):
-                if line[i] == '\t':
+            for i in range(start, max(end, start + 1)):
+                if i < len(line) and line[i] == '\t':
                     buf.append('^^^^')
                 else:
                     buf.append('^')
@@ -447,11 +498,18 @@ def validate_gettext(s, filename, func_name, valid_keys):
                     try:
                         str_arg0 = parse_strings(arg0.tokens)
                     except SyntaxError as e:
-                        raise ParserError(arg0.lineno, arg0.column, arg0.start, arg0.end, "string literal", s[arg0.start:arg0.end])
+                        raise ParserError(arg0.lineno, arg0.column, arg0.start, arg0.end, str(e))
                     if str_arg0 not in valid_keys:
                         print_errors(filename, s, arg0.tokens, "not a know string reference")
                 else:
                     print_errors(filename, s, arg0.tokens, "not a string literal")
+    except UnbalancedParenthesisError as e:
+        illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
+        print_errors(filename, s, [illegal], str(e))
+
+        illegal = Atom(e.other_start, e.other_end, e.other_lineno, e.other_column, ILLEGAL, s[e.other_start:e.other_end])
+        print_errors(filename, s, [illegal], "open bracket was here")
+
     except ParserError as e:
         illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
         print_errors(filename, s, [illegal], str(e))
@@ -474,7 +532,7 @@ def _gettext(node, func_name):
                     if prev.val in ('->', '.'):
                         i += 1
                         continue
-                    
+
                     if i - 1 > 0 and prev.val == '::':
                         prev = node.tokens[i - 2]
                         if prev.tok == IDENT:
@@ -486,7 +544,7 @@ def _gettext(node, func_name):
                 if next_child.tokens[0].val == '(':
                     yield child, next_child
                     i += 1
-                
+
         elif child.tok == TREE:
             yield from _gettext(child, func_name)
         i += 1
