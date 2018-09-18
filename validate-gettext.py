@@ -112,7 +112,7 @@ def parse_string(val):
     elif val.startswith('R"'):
         return 'R', RAW_STR.match(val).group(1)
     elif val.startswith('"'):
-        prefix = ''
+        prefix = None
         s = val[1:-1]
     else:
         raise SyntaxError('illegal string literal: ' + val)
@@ -132,7 +132,7 @@ def parse_strings(tokens):
         p, val = parse_string(tok.val)
         if prefix is None:
             prefix = p
-        elif p != prefix:
+        elif p is not None and p != prefix:
             raise UnexpectedTokenError(tok.lineno, tok.column, tok.start, tok.end, _prefix_msg(prefix), _prefix_msg(p))
         buf.append(val)
     return ''.join(buf)
@@ -542,7 +542,7 @@ def _gettext(node, func_name):
 
 if __name__ == '__main__':
     with open(sys.argv[1]) as fp:
-        known = set(fp)
+        known = set(line.rstrip('\n') for line in fp)
     if '' in known:
         known.remove('')
     filename = sys.argv[2]

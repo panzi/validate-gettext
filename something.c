@@ -13,6 +13,11 @@ void main() {
 	
 	);
 
+	puts(_("another" L" known " "key"));
+	puts(_("key with umlauts äÖü"));
+	puts(_(L"key with umlauts äÖü"));
+	puts(_(u8"key with umlauts äÖü"));
+
 	// _(egg)
 	int i = 'f';
 	++ i;
