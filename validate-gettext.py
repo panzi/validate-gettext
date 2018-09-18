@@ -360,13 +360,15 @@ def parse_comma_list(tokens):
 
     return parsed
 
+NON_JOIN_CHARS = WORD_CHARS | {'"', "'"}
+
 def join_tokens(tokens):
     buf = [str(tok) for tok in tokens]
     i = 1
     while i < len(buf):
         c1 = buf[i - 1][-1]
         c2 = buf[i][0]
-        if (c1 in WORD_CHARS and c2 in WORD_CHARS) or (c1 in "'\"" and c2 in "'\""):
+        if c1 in NON_JOIN_CHARS and c2 in NON_JOIN_CHARS:
             buf.insert(i, ' ')
             i += 1
         i += 1
