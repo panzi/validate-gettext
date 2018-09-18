@@ -130,18 +130,28 @@ def parse_string(val):
 def _prefix_msg(prefix):
     return "string literal prefix " + prefix if prefix else "no string literal prefix"
 
+def first_atom(node):
+    if node.tok != TREE:
+        return node
+    return first_atom(node.tokens[0])
+
 def parse_strings(tokens):
     # NOTE: this accepts concatenation of incompatible string literlas, like: L"foo" "bar"
     buf = []
     prefix = None
     for tok in tokens:
         if tok.tok != STRING:
-            raise SyntaxError("not a string token: %s" + tok)
-        p, val = parse_string(tok.val)
+            raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column,
+                "string literal", first_atom(tok).val)
+        try:
+            p, val = parse_string(tok.val)
+        except SyntaxError as e:
+            raise ParserError(tok.lineno, tok.column, tok.end_lineno, tok.end_column, str(e))
         if prefix is None:
             prefix = p
         elif p is not None and p != prefix:
-            raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column, _prefix_msg(prefix), _prefix_msg(p))
+            raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column,
+                _prefix_msg(prefix), _prefix_msg(p))
         buf.append(val)
     return ''.join(buf)
 
@@ -246,6 +256,9 @@ class Tree(Node):
         return self.tokens[-1].end_column
 
     def is_strings(self):
+        if not self.tokens:
+            return False
+
         for tok in self.tokens:
             if tok.tok != STRING:
                 return False
@@ -349,18 +362,22 @@ def find_last_tree(node):
 
 def parse_comma_list(tokens):
     parsed = []
-    node = Tree()
-    for tok in tokens:
-        if tok.tok == OPERATOR and tok.val == ',':
-            parsed.append(node)
-            node = Tree()
-        else:
-            node.tokens.append(tok)
-
-    if node.tokens:
+    if tokens:
+        node = Tree()
         parsed.append(node)
+        for tok in tokens:
+            if tok.tok == OPERATOR and tok.val == ',':
+                if not node.tokens:
+                    raise UnexpectedTokenError(tok.lineno, tok.column,
+                        tok.end_lineno, tok.end_column, "an expression", tok.val)
+                node = Tree()
+                parsed.append(node)
+            else:
+                node.tokens.append(tok)
 
-    # FIXME: this allows trailing commas
+        if not node.tokens:
+            raise ParserError(tok.lineno, tok.column,
+                tok.end_lineno, tok.end_column, "trailing comma")
 
     return parsed
 
@@ -410,9 +427,6 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, 
                 if arg0.is_strings():
                     try:
                         arg0_str = parse_strings(arg0.tokens)
-                    except SyntaxError as e:
-                        print_mark(filename, lines, arg0.tokens, str(e), before=before, after=after, color=color)
-                        ok = False
                     except ParserError as e:
                         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
                         print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
