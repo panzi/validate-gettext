@@ -30,7 +30,10 @@ void main() {
 	puts(_(L"key with umlauts äÖü"));
 	puts(_(u8"key with umlauts äÖü"));
 
-	// _(egg)
+	// this will be parsed as 4 arguments :/
+	puts(_("known", std::pair<int, int>(1, 2), 123));
+
+	// _(egg), _("bacon")
 	int i = 'f';
 	++ i;
 	i += 1;
@@ -43,7 +46,7 @@ void main() {
 
 /* foo
  *
- * bar _("bacon")
+ * bar _("spam")
  */
 	int variable = 0;
 

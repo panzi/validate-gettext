@@ -392,45 +392,46 @@ def split_lines(s):
         lines.append("")
     return lines
 
-def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False):
+def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, before=0, after=0):
     lines = split_lines(s)
     ok = True
     try:
         for ident_tok, args_tok in gettext(s, func_name):
             args = parse_comma_list(args_tok.tokens[1:-1])
             if not args:
-                print_mark(filename, lines, [ident_tok, args_tok], "no arguments")
+                print_mark(filename, lines, [ident_tok, args_tok], "no arguments", before=before, after=after)
             else:
                 arg0 = args[0]
                 if arg0.is_strings():
                     try:
                         arg0_str = parse_strings(arg0.tokens)
                     except SyntaxError as e:
-                        print_mark(filename, lines, arg0.tokens, str(e))
+                        print_mark(filename, lines, arg0.tokens, str(e), before=before, after=after)
                         ok = False
                     except ParserError as e:
                         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
-                        print_mark(filename, lines, [illegal], str(e))
+                        print_mark(filename, lines, [illegal], str(e), before=before, after=after)
                         ok = False
                     else:
                         if arg0_str not in valid_keys:
-                            print_mark(filename, lines, arg0.tokens, "not a know string key")
+                            print_mark(filename, lines, arg0.tokens, "not a know string key", before=before, after=after)
                             ok = False
                         elif not only_errors:
-                            print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation", GREEN)
+                            print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation",
+                                mark_color=GREEN, before=before, after=after)
                             print("\tparsed format argument: %r" % arg0_str)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
                 else:
-                    print_mark(filename, lines, arg0.tokens, "not a string literal")
+                    print_mark(filename, lines, arg0.tokens, "not a string literal", before=before, after=after)
                     ok = False
     except UnbalancedParenthesisError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e))
+        print_mark(filename, lines, [illegal], str(e), before=before, after=after)
 
         illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
-        print_mark(filename, lines, [illegal], "open bracket was here")
+        print_mark(filename, lines, [illegal], "open bracket was here", before=before, after=after)
         ok = False
     return ok
 
@@ -472,7 +473,7 @@ class LineInfo:
             i += 1
         self.ranges.append([start, end])
 
-def gather_lines(lines, toks):
+def gather_lines(lines, toks, before=0, after=0):
     line_infos = {}
     for tok in toks:
         start_lineno = tok.lineno
@@ -495,37 +496,51 @@ def gather_lines(lines, toks):
                 end = tok.end_column - 1
 
             info.add_range(start, end)
+    
+    for info in list(line_infos.values()):
+        if before > 0:
+            for lineno in range(info.lineno - before, info.lineno):
+                if lineno not in line_infos:
+                    line_infos[lineno] = LineInfo(lineno, lines[lineno - 1])
+
+        if after > 0:
+            for lineno in range(info.lineno + 1, info.lineno + after + 1):
+                if lineno not in line_infos:
+                    line_infos[lineno] = LineInfo(lineno, lines[lineno - 1])
+
     return [line_infos[lineno] for lineno in sorted(line_infos)]
 
-def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE):
+def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE, before=0, after=0):
     if sys.stdout.isatty():
         normal = NORMAL
     else:
         mark_color = lineno_color = normal = ""
     line_padd = 1 + len(str(toks[-1].end_lineno))
     print("%s:%d:%d: %s" % (filename, toks[0].lineno, toks[0].column, message))
-    infos = gather_lines(lines, toks)
+    infos = gather_lines(lines, toks, before, after)
     for info in infos:
         line = info.line
         str_lineno = str(info.lineno)
         print('%s%s%s |%s %s' % (lineno_color, ' ' * (line_padd - len(str_lineno)), str_lineno, normal, line.replace('\t', '    ')))
-        buf = ['%s%s |%s ' % (lineno_color, ' ' * line_padd, normal)]
-        prev = 0
-        for start, end in info.ranges:
-            for i in range(prev, start):
-                if i < len(line) and line[i] == '\t':
-                    buf.append('    ')
-                else:
-                    buf.append(' ')
-            buf.append(mark_color)
-            for i in range(start, max(end, start + 1)):
-                if i < len(line) and line[i] == '\t':
-                    buf.append('^^^^')
-                else:
-                    buf.append('^')
-            buf.append(normal)
-            prev = end
-        print(''.join(buf))
+
+        if info.ranges:
+            buf = ['%s%s |%s ' % (lineno_color, ' ' * line_padd, normal)]
+            prev = 0
+            for start, end in info.ranges:
+                for i in range(prev, start):
+                    if i < len(line) and line[i] == '\t':
+                        buf.append('    ')
+                    else:
+                        buf.append(' ')
+                buf.append(mark_color)
+                for i in range(start, max(end, start + 1)):
+                    if i < len(line) and line[i] == '\t':
+                        buf.append('^^^^')
+                    else:
+                        buf.append('^')
+                buf.append(normal)
+                prev = end
+            print(''.join(buf))
     print()
 
 def gettext(s, func_name='_'):
@@ -579,9 +594,10 @@ def main(args):
     parser.add_argument('source', nargs='+')
     parser.add_argument('--func-name', default='_')
     parser.add_argument('--only-errors', default=False, action='store_true')
+    parser.add_argument('--before', type=int, default=0)
+    parser.add_argument('--after', type=int, default=0)
     opts = parser.parse_args(args)
 
-    func_name = opts.func_name
     with open(opts.valid_keys) as fp:
         valid_keys = set(line.rstrip('\n') for line in fp)
 
@@ -592,7 +608,11 @@ def main(args):
     for source in opts.source:
         with open(source) as fp:
             s = fp.read()
-        if not validate_gettext(s, source, valid_keys, func_name, opts.only_errors):
+        if not validate_gettext(s, source, valid_keys,
+                func_name = opts.func_name,
+                only_errors = opts.only_errors,
+                before = opts.before,
+                after = opts.after):
             status = 1
     return status
 
