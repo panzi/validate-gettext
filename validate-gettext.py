@@ -404,7 +404,7 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False):
                 arg0 = args[0]
                 if arg0.is_strings():
                     try:
-                        arg0 = parse_strings(arg0.tokens)
+                        arg0_str = parse_strings(arg0.tokens)
                     except SyntaxError as e:
                         print_mark(filename, lines, arg0.tokens, str(e))
                         ok = False
@@ -413,9 +413,11 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False):
                         print_mark(filename, lines, [illegal], str(e))
                         ok = False
                     else:
-                        if not only_errors:
+                        if arg0_str not in valid_keys:
+                            print_mark(filename, lines, arg0.tokens, "not a know string key")
+                        elif not only_errors:
                             print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation", GREEN)
-                            print("\tparsed format argument: %r" % arg0)
+                            print("\tparsed format argument: %r" % arg0_str)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
