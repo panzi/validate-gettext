@@ -503,7 +503,7 @@ def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE
     else:
         mark_color = lineno_color = normal = ""
     line_padd = 1 + len(str(toks[-1].end_lineno))
-    print("%s:%d:%d" % (filename, toks[0].lineno, toks[0].column), message)
+    print("%s:%d:%d: %s" % (filename, toks[0].lineno, toks[0].column, message))
     infos = gather_lines(lines, toks)
     for info in infos:
         line = info.line
