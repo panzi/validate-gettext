@@ -400,6 +400,7 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, 
             args = parse_comma_list(args_tok.tokens[1:-1])
             if not args:
                 print_mark(filename, lines, [ident_tok, args_tok], "no arguments", before=before, after=after, color=color)
+                ok = False
             else:
                 arg0 = args[0]
                 if arg0.is_strings():
@@ -419,7 +420,7 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, 
                         elif not only_errors:
                             print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation",
                                 mark_color=GREEN, before=before, after=after, color=color)
-                            print("\tparsed format argument: %r" % arg0_str)
+                            print("\tparsed string key: %r" % arg0_str)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
