@@ -415,6 +415,7 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False):
                     else:
                         if arg0_str not in valid_keys:
                             print_mark(filename, lines, arg0.tokens, "not a know string key")
+                            ok = False
                         elif not only_errors:
                             print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation", GREEN)
                             print("\tparsed format argument: %r" % arg0_str)
@@ -423,6 +424,7 @@ def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False):
                             print()
                 else:
                     print_mark(filename, lines, arg0.tokens, "not a string literal")
+                    ok = False
     except UnbalancedParenthesisError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
         print_mark(filename, lines, [illegal], str(e))
