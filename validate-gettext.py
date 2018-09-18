@@ -477,15 +477,6 @@ def print_errors(fielname, s, toks, message):
         print(''.join(buf))
     print()
 
-# only to be used on a comma list in parenthesis
-def find_before_comma(tokens):
-    for i, tok in enumerate(tokens):
-        if tok.tok == OPERATOR and tok.val == ',':
-            return tokens[i - 1]
-    if tokens[-1].tok == BRACKET and tokens[-1].val == ')':
-        return tokens[-2]
-    return tokens[-1]
-
 def validate_gettext(s, filename, func_name, valid_keys):
     try:
         for ident_tok, args_tok in gettext(s, func_name):
