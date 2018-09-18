@@ -322,49 +322,107 @@ def print_gettext(s, func_name='_'):
             print()
     except ParserError as e:
         illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
-        print_error(filename, s, illegal, illegal, str(e))
+        print_errors(filename, s, [illegal], str(e))
 
 RED = "\x1b[31m"
 BLUE = "\x1b[34m"
 NORMAL = "\x1b[0m"
 
-def print_error(filename, s, start_tok, end_tok, message):
-    lines = s.split('\n')[start_tok.lineno - 1:end_tok.lineno]
+class LineInfo:
+    __slots__ = 'lineno', 'line', 'ranges'
+
+    def __init__(self, lineno, line):
+        self.lineno = lineno
+        self.line = line
+        self.ranges = []
+    
+    def add_range(self, start, end):
+        i = 0
+        while i < len(self.ranges):
+            o_start, o_end = self.ranges[i]
+            if start <= o_end and end >= o_end:
+                if start < o_start:
+                    self.ranges[i][0] = start
+                self.ranges[i][1] = end
+                i += 1
+                while i < len(self.ranges):
+                    next_start, next_end = self.ranges[i]
+                    if next_start <= end:
+                        del self.ranges[i]
+                        if end < next_end:
+                            end = next_end
+                            self.ranges[i - 1][1] = end
+                    else:
+                        i += 1
+                return
+            elif start <= o_start and end >= o_start:
+                self.ranges[i][0] = start
+                if end > o_end:
+                    self.ranges[i][1] = end
+                return
+            elif end < o_start:
+                self.ranges.insert(i, [start, end])
+                return
+            i += 1
+        self.ranges.append([start, end])
+
+def gather_lines(s, toks):
+    lines = s.split('\n')
+    line_infos = {}
+    for tok in toks:
+        start_line = tok.lineno
+        end_line = start_line + s.count('\n', tok.start, tok.end)
+        for lineno in range(start_line, end_line + 1):
+            if lineno in line_infos:
+                info = line_infos[lineno]
+                line = info.line
+            else:
+                line_index = lineno - 1
+                line = lines[line_index]
+                info = LineInfo(lineno, line)
+                line_infos[lineno] = info
+            
+            start = 0 if lineno > start_line else tok.column - 1
+
+            if lineno < end_line:
+                end = len(line)
+            else:
+                line_start = s.rfind('\n', 0, tok.end) + 1
+                end = tok.end - line_start
+            
+            info.add_range(start, end)
+    return [line_infos[lineno] for lineno in sorted(line_infos)]
+
+def print_errors(fielname, s, toks, message):
     if sys.stdout.isatty():
         red = RED
         blue = BLUE
         normal = NORMAL
     else:
         red = blue = normal = ""
-    line_padd = 1 + len(str(end_tok.lineno + s.count('\n', end_tok.start, end_tok.end)))
-    print("%s:%d:%d" % (filename, start_tok.lineno, start_tok.column), message)
-    for i, line in enumerate(lines):
-        if not line.strip():
-            continue
-        start = 0 if i > 0 else start_tok.column - 1
-        
-        if i + 1 < len(lines):
-            end = len(line)
-        else:
-            line_start = s.rfind('\n', 0, end_tok.end) + 1
-            end = end_tok.end - line_start
-
-        mark_len = end - start
-        slineno = str(i + start_tok.lineno)
-        print('%s%s%s |%s %s' % (blue, ' ' * (line_padd - len(slineno)), slineno, normal, line.replace('\t', '    ')))
+    line_padd = 1 + len(str(toks[-1].lineno + s.count('\n', toks[-1].start, toks[-1].end)))
+    print("%s:%d:%d" % (filename, toks[0].lineno, toks[0].column), message)
+    infos = gather_lines(s, toks)
+    for info in infos:
+        line = info.line
+        str_lineno = str(info.lineno)
+        print('%s%s%s |%s %s' % (blue, ' ' * (line_padd - len(str_lineno)), str_lineno, normal, line.replace('\t', '    ')))
         buf = ['%s%s |%s ' % (blue, ' ' * line_padd, normal)]
-        for i in range(0, start):
-            if line[i] == '\t':
-                buf.append('    ')
-            else:
-                buf.append(' ')
-        buf.append(red)
-        for i in range(start, start + max(mark_len, 1)):
-            if line[i] == '\t':
-                buf.append('^^^^')
-            else:
-                buf.append('^')
-        buf.append(normal)
+        prev = 0
+        for start, end in info.ranges:
+            for i in range(prev, start):
+                if line[i] == '\t':
+                    buf.append('    ')
+                else:
+                    buf.append(' ')
+            buf.append(red)
+            for i in range(start, end):
+                if line[i] == '\t':
+                    buf.append('^^^^')
+                else:
+                    buf.append('^')
+            buf.append(normal)
+            prev = end
         print(''.join(buf))
     print()
 
@@ -382,21 +440,21 @@ def validate_gettext(s, filename, func_name, valid_keys):
         for ident_tok, args_tok in gettext(s, func_name):
             args = parse_comma_list(args_tok.tokens[1:-1])
             if not args:
-                print_error(filename, s, ident_tok, args_tok, "no arguments")
+                print_errors(filename, s, [ident_tok, args_tok], "no arguments")
             else:
                 arg0 = args[0]
                 if arg0.is_strings():
                     try:
-                        arg0 = parse_strings(arg0.tokens)
+                        str_arg0 = parse_strings(arg0.tokens)
                     except SyntaxError as e:
                         raise ParserError(arg0.lineno, arg0.column, arg0.start, arg0.end, "string literal", s[arg0.start:arg0.end])
-                    if arg0 not in valid_keys:
-                        print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a know string reference")
+                    if str_arg0 not in valid_keys:
+                        print_errors(filename, s, arg0.tokens, "not a know string reference")
                 else:
-                    print_error(filename, s, args[0], find_before_comma(args_tok.tokens), "not a string literal")
+                    print_errors(filename, s, arg0.tokens, "not a string literal")
     except ParserError as e:
         illegal = Atom(e.start, e.end, e.lineno, e.column, ILLEGAL, s[e.start:e.end])
-        print_error(filename, s, illegal, illegal, str(e))
+        print_errors(filename, s, [illegal], str(e))
 
 def gettext(s, func_name='_'):
     node = parse(s)
