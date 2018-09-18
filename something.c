@@ -6,9 +6,9 @@ void main() {
 	const char *baz;
 	_("foo\" bar \n", baz);
 
-	::_("this "
-	
-				"xxx"
+	::_("this " // comment
+	// comment
+				"xxx" /* comment */ "aaa"
 			"should be found \0 \12 \u00a0 \U0000000A \t \x20 \r\n\v\b\f", a, b, c
 	
 	);

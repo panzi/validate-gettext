@@ -6,7 +6,7 @@ of hours on two days.
 
 Example output:
 
-![](https://i.imgur.com/gbimISU.png)
+![](https://i.imgur.com/QzsdxsA.png)
 
 Note
 ----
