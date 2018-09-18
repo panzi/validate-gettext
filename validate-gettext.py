@@ -4,6 +4,14 @@ import re
 import sys
 import string
 
+RED     = "\x1b[31m"
+GREEN   = "\x1b[32m"
+YELLOW  = "\x1b[33m"
+BLUE    = "\x1b[34m"
+MAGENTA = "\x1b[35m"
+CYAN    = "\x1b[36m"
+NORMAL  = "\x1b[0m"
+
 WORD_CHARS = frozenset(string.ascii_letters + string.digits)
 
 CLOSE_BRACKET_MAP = {
@@ -382,43 +390,43 @@ def split_lines(s):
         lines.append("")
     return lines
 
-def print_gettext(s, filename, func_name='_'):
+def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False):
+    lines = split_lines(s)
+    ok = True
     try:
         for ident_tok, args_tok in gettext(s, func_name):
-            print('gettext at line %d column %d: _%s' % (ident_tok.lineno, ident_tok.column,
-                join_tokens(args_tok.tokens)))
-
             args = parse_comma_list(args_tok.tokens[1:-1])
             if not args:
-                print("\tNO ARGUMENTS!")
+                print_mark(filename, lines, [ident_tok, args_tok], "no arguments")
             else:
                 arg0 = args[0]
                 if arg0.is_strings():
                     try:
                         arg0 = parse_strings(arg0.tokens)
                     except SyntaxError as e:
-                        raise ParserError(arg0.lineno, arg0.column, arg0.end_lineno, arg0.end_column, str(e))
+                        print_mark(filename, lines, arg0.tokens, str(e))
+                        ok = False
+                    except ParserError as e:
+                        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+                        print_mark(filename, lines, [illegal], str(e))
+                        ok = False
                     else:
-                        print("\tparsed format argument: %r" % arg0)
-                for argind, arg in enumerate(args):
-                    print("\targ %d: %s" % (argind, arg))
-            print()
+                        if not only_errors:
+                            print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation", GREEN)
+                            print("\tparsed format argument: %r" % arg0)
+                            for argind, arg in enumerate(args):
+                                print("\targument %d: %s" % (argind, arg))
+                            print()
+                else:
+                    print_mark(filename, lines, arg0.tokens, "not a string literal")
     except UnbalancedParenthesisError as e:
-        lines = split_lines(s)
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
         print_mark(filename, lines, [illegal], str(e))
 
         illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
         print_mark(filename, lines, [illegal], "open bracket was here")
-
-    except ParserError as e:
-        lines = split_lines(s)
-        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e))
-
-RED = "\x1b[31m"
-BLUE = "\x1b[34m"
-NORMAL = "\x1b[0m"
+        ok = False
+    return ok
 
 class LineInfo:
     __slots__ = 'lineno', 'line', 'ranges'
@@ -514,38 +522,11 @@ def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE
         print(''.join(buf))
     print()
 
-def validate_gettext(s, filename, func_name, valid_keys):
-    lines = split_lines(s)
-    try:
-        for ident_tok, args_tok in gettext(s, func_name):
-            args = parse_comma_list(args_tok.tokens[1:-1])
-            if not args:
-                print_mark(filename, lines, [ident_tok, args_tok], "no arguments")
-            else:
-                arg0 = args[0]
-                if arg0.is_strings():
-                    try:
-                        str_arg0 = parse_strings(arg0.tokens)
-                    except SyntaxError as e:
-                        raise ParserError(arg0.lineno, arg0.column, arg0.end_lineno, arg0.end_column, str(e))
-                    if str_arg0 not in valid_keys:
-                        print_mark(filename, lines, arg0.tokens, "not a know string reference")
-                else:
-                    print_mark(filename, lines, arg0.tokens, "not a string literal")
-    except UnbalancedParenthesisError as e:
-        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e))
-
-        illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
-        print_mark(filename, lines, [illegal], "open bracket was here", mark_color=BLUE)
-
-    except ParserError as e:
-        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e))
-
 def gettext(s, func_name='_'):
     node = parse(s)
     yield from _gettext(node, func_name)
+
+EXPR_KEYWORS = frozenset(['return', 'case', 'goto', 'sizeof', '__typeof__', '__typeof', 'typeof'])
 
 def _gettext(node, func_name):
     i = 0
@@ -559,14 +540,21 @@ def _gettext(node, func_name):
                 prev = node.tokens[i - 1]
                 if prev.tok == OPERATOR:
                     if prev.val in ('->', '.'):
+                        # method invocation
                         i += 1
                         continue
 
                     if i - 1 > 0 and prev.val == '::':
+                        # C++ namespaced function invocation
                         prev = node.tokens[i - 2]
                         if prev.tok == IDENT:
                             i += 1
                             continue
+
+                elif prev.tok == IDENT and prev.val not in EXPR_KEYWORS:
+                    # function declaration/definition
+                    i += 1
+                    continue
 
             if child.val == func_name and i + 1 < len(node.tokens) and node.tokens[i + 1].tok == TREE:
                 next_child = node.tokens[i + 1]
@@ -578,15 +566,29 @@ def _gettext(node, func_name):
             yield from _gettext(child, func_name)
         i += 1
 
-def main(known_keys='known_keys.txt', source='something.c', func_name='_'):
-    with open(known_keys) as fp:
-        known = set(line.rstrip('\n') for line in fp)
-    if '' in known:
-        known.remove('')
-    with open(source) as fp:
-        s = fp.read()
-    #print_gettext(s, source, func_name)
-    validate_gettext(s, source, func_name, known)
+def main(args):
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('valid_keys')
+    parser.add_argument('source', nargs='+')
+    parser.add_argument('--func-name', default='_')
+    parser.add_argument('--only-errors', default=False, action='store_true')
+    opts = parser.parse_args(args)
+
+    func_name = opts.func_name
+    with open(opts.valid_keys) as fp:
+        valid_keys = set(line.rstrip('\n') for line in fp)
+
+    if '' in valid_keys:
+        valid_keys.remove('')
+
+    status = 0
+    for source in opts.source:
+        with open(source) as fp:
+            s = fp.read()
+        if not validate_gettext(s, source, valid_keys, func_name, opts.only_errors):
+            status = 1
+    return status
 
 if __name__ == '__main__':
-    main(*sys.argv[1:])
+    sys.exit(main(sys.argv[1:]))

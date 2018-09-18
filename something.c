@@ -2,6 +2,12 @@
 #define FOO \
 	_("this is ignored")
 
+void _(void *key, ...) {}
+
+void other() {
+	return _("known");
+}
+
 void main() {
 	const char *baz;
 	_("foo\" bar \n", baz);
@@ -13,6 +19,12 @@ void main() {
 	
 	);
 
+	puts("known");
+	puts("unknown");
+
+	puts(_(L"illegal" U"concatenation"));
+	puts(_(u8"another" "illegal" L"concatenation"));
+
 	puts(_("another" L" known " "key"));
 	puts(_("key with umlauts äÖü"));
 	puts(_(L"key with umlauts äÖü"));
@@ -23,7 +35,7 @@ void main() {
 	++ i;
 	i += 1;
 
-	struct Foo foo;
+	struct {} foo;
 	foo._("this is ignored");
 
 	(&foo)->_("so is this");
@@ -33,6 +45,7 @@ void main() {
  *
  * bar _("bacon")
  */
+	int variable = 0;
 
 _(variable);
 			_();

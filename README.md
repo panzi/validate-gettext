@@ -1,8 +1,7 @@
 Validate Gettext
 ================
 
-A very simple gettext validator for C/C++/Objective-C. I wrote this in a couple
-of hours on two days.
+A very simple gettext validator for C/C++/Objective-C.
 
 Example output:
 
