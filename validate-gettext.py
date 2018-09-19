@@ -602,7 +602,7 @@ def gettext(s, func_defs='_'):
     node = parse(s)
     yield from _gettext(node, func_defs)
 
-EXPR_KEYWORS = frozenset(['return', 'case', 'goto', 'sizeof', '__typeof__', '__typeof', 'typeof'])
+EXPR_KEYWORDS = frozenset(['return', 'case', 'goto', 'sizeof', '__typeof__', '__typeof', 'typeof'])
 
 def _gettext(node, func_defs):
     i = 0
@@ -627,7 +627,7 @@ def _gettext(node, func_defs):
                             i += 1
                             continue
 
-                elif prev.tok == IDENT and prev.val not in EXPR_KEYWORS:
+                elif prev.tok == IDENT and prev.val not in EXPR_KEYWORDS:
                     # function declaration/definition
                     i += 1
                     continue
