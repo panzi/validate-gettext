@@ -50,7 +50,8 @@ LEX = re.compile(
     r'(@[_a-z][_a-z0-9]*)|' + # tag
     r'([-+*/%&|^!=<>]=|<<=?|>>=?|\|\||&&|->|\.\.\.|--|\+\+|##|::|[-+./*,!^~<>|&?:%=;@])|' + # operators
     r'([{}()\[\]])|' + # brackets
-    r'(#(?:\\\n|[^\n])*)|' +
+    r'((?i:#[ \t]*\d+[ \t]*"(?:[^"\n\\]|\\[\\?"'+"'"+r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2})*"[^\n]*$))|' + # source map
+    r'(#(?:\\\n|[^\n])*)|' + # preproc
     r'(\\\n)', # line continuation
     re.M | re.I)
 
@@ -65,8 +66,9 @@ class TOK(enum.IntEnum):
     TAG        =  8
     OPERATOR   =  9
     BRACKET    = 10
-    PREPROC    = 11
-    LINE_CONT  = 12
+    SOURCE_MAP = 11
+    PREPROC    = 12
+    LINE_CONT  = 13
 
     TREE    = -1
     ILLEGAL = -2
@@ -161,7 +163,27 @@ def parse_string(tokens):
         buf.append(val)
     return ''.join(buf)
 
+class SourceMap:
+    __slots__ = 'filename', 'src_lineno', 'map_lineno'
+
+    def __init__(self, filename, src_lineno, map_lineno):
+        self.filename   = filename
+        self.src_lineno = src_lineno
+        self.map_lineno = map_lineno
+
+    def pos(self, lineno):
+        return (self.filename, lineno - self.src_lineno + self.map_lineno)
+
+SOURCE_MAP = re.compile(r'^#[ \t]*(\d+)[ \t]*("(?:[^"\n\\]|\\[\\?"'+"'"+
+    r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2})*")[ \t]*(?:(\d+)(?:[ \t]*(\d+))?)?')
+
+def parse_source_map(lineno, src):
+    m = SOURCE_MAP.match(src)
+    _, filename = parse_string_token(m.group(2))
+    return SourceMap(filename, lineno + 1, int(m.group(1)))
+
 def tokens(s):
+    source_map = None
     index = 0
     n = len(s)
     lineno = 1
@@ -184,7 +206,13 @@ def tokens(s):
         for tok in TOKENS:
             val = m.group(tok)
             if val is not None:
-                yield Atom(lineno, column, end_lineno, end_column, TOK(tok), val)
+                #print(lineno, column, end_lineno, end_column, TOK(tok), repr(val))
+                atom = Atom(lineno, column, end_lineno, end_column, TOK(tok), val,
+                    source_map.pos(lineno) if source_map is not None else None)
+                if atom.tok == TOK.SOURCE_MAP:
+                    source_map = parse_source_map(lineno, val)
+                else:
+                    yield atom
                 break
 
         lineno = end_lineno
@@ -222,18 +250,32 @@ class Node:
         return ''.join(self.slice(lines))
 
 class Atom(Node):
-    __slots__ = 'lineno', 'column', 'end_lineno', 'end_column', 'tok', 'val'
+    __slots__ = 'lineno', 'column', 'end_lineno', 'end_column', 'tok', 'val', 'source_map'
 
-    def __init__(self, lineno, column, end_lineno, end_column, tok, val):
+    def __init__(self, lineno, column, end_lineno, end_column, tok, val, source_map=None):
         self.lineno = lineno
         self.column = column
         self.end_lineno = end_lineno
         self.end_column = end_column
         self.tok = tok
         self.val = val
+        self.source_map = source_map
 
     def __str__(self):
         return self.val
+
+    def start_pos(self):
+        if self.source_map:
+            return (self.source_map[1], self.column)
+        else:
+            return (self.lineno, self.column)
+
+    def end_pos(self):
+        if self.source_map:
+            _, map_lineno, _ = self.source_map
+            return (self.end_lineno - self.lineno + map_lineno, self.end_column)
+        else:
+            return (self.end_lineno, self.end_column)
 
 class Tree(Node):
     __slots__ = 'tokens', 'tok'
@@ -475,12 +517,13 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
     return ok
 
 class LineInfo:
-    __slots__ = 'lineno', 'line', 'ranges'
+    __slots__ = 'lineno', 'map_lineno', 'line', 'ranges'
 
-    def __init__(self, lineno, line):
-        self.lineno = lineno
-        self.line   = line
-        self.ranges = []
+    def __init__(self, lineno, map_lineno, line):
+        self.lineno     = lineno
+        self.map_lineno = map_lineno
+        self.line       = line
+        self.ranges     = []
     
     def add_range(self, start, end):
         i = 0
@@ -517,6 +560,10 @@ def gather_lines(lines, toks, before=0, after=0):
     for tok in toks:
         start_lineno = tok.lineno
         end_lineno = tok.end_lineno
+        if tok.source_map:
+            map_lineno = tok.source_map[1]
+        else:
+            map_lineno = start_lineno
         for lineno in range(start_lineno, end_lineno + 1):
             if lineno in line_infos:
                 info = line_infos[lineno]
@@ -524,7 +571,7 @@ def gather_lines(lines, toks, before=0, after=0):
             else:
                 line_index = lineno - 1
                 line = lines[line_index] if line_index != len(lines) else ''
-                info = LineInfo(lineno, line)
+                info = LineInfo(lineno, lineno - start_lineno + map_lineno, line)
                 line_infos[lineno] = info
 
             start = 0 if lineno > start_lineno else tok.column - 1
@@ -535,17 +582,17 @@ def gather_lines(lines, toks, before=0, after=0):
                 end = tok.end_column - 1
 
             info.add_range(start, end)
-    
+
     for info in list(line_infos.values()):
         if before > 0:
             for lineno in range(max(info.lineno - before, 1), info.lineno):
                 if lineno not in line_infos:
-                    line_infos[lineno] = LineInfo(lineno, lines[lineno - 1])
+                    line_infos[lineno] = LineInfo(lineno, lineno - info.lineno + info.map_lineno, lines[lineno - 1])
 
         if after > 0:
             for lineno in range(info.lineno + 1, min(info.lineno + after, len(lines)) + 1):
                 if lineno not in line_infos:
-                    line_infos[lineno] = LineInfo(lineno, lines[lineno - 1])
+                    line_infos[lineno] = LineInfo(lineno, lineno - info.lineno + info.map_lineno, lines[lineno - 1])
 
     return [line_infos[lineno] for lineno in sorted(line_infos)]
 
@@ -567,12 +614,22 @@ def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE
     else:
         mark_color = lineno_color = normal = ""
     toks = flatten_tree(toks)
-    line_padd = 1 + len(str(toks[-1].end_lineno))
-    print("%s:%d:%d: %s" % (filename, toks[0].lineno, toks[0].column, message))
+    last_lineno, _ = toks[-1].start_pos()
+    line_padd = 1 + len(str(last_lineno))
+
+    first_tok = toks[0]
+    first_lineno, first_column = first_tok.start_pos()
+
+    if first_tok.source_map:
+        map_filename = first_tok.source_map[0]
+    else:
+        map_filename = filename
+
+    print("%s:%d:%d: %s" % (map_filename, first_lineno, first_column, message))
     infos = gather_lines(lines, toks, before, after)
     for info in infos:
         line = info.line
-        str_lineno = str(info.lineno)
+        str_lineno = str(info.map_lineno)
         print('%s%s%s |%s %s' % (lineno_color, ' ' * (line_padd - len(str_lineno)), str_lineno, normal, line.replace('\t', '    ')))
 
         if info.ranges:
