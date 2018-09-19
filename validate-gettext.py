@@ -561,18 +561,21 @@ def gather_lines(lines, toks, before=0, after=0):
         start_lineno = tok.lineno
         end_lineno = tok.end_lineno
         if tok.source_map:
-            map_lineno = tok.source_map[1]
+            map_start_lineno = tok.source_map[1]
         else:
-            map_lineno = start_lineno
+            map_start_lineno = start_lineno
         for lineno in range(start_lineno, end_lineno + 1):
-            if lineno in line_infos:
-                info = line_infos[lineno]
-                line = info.line
+            map_lineno = lineno - start_lineno + map_start_lineno
+            line_index = lineno - 1
+            line = lines[line_index] if line_index != len(lines) else ''
+
+            if map_lineno in line_infos:
+                info = line_infos[map_lineno]
+                line = info.line + line[len(info.line):]
+                info.line = line
             else:
-                line_index = lineno - 1
-                line = lines[line_index] if line_index != len(lines) else ''
-                info = LineInfo(lineno, lineno - start_lineno + map_lineno, line)
-                line_infos[lineno] = info
+                info = LineInfo(lineno, map_lineno, line)
+                line_infos[map_lineno] = info
 
             start = 0 if lineno > start_lineno else tok.column - 1
 
@@ -583,6 +586,7 @@ def gather_lines(lines, toks, before=0, after=0):
 
             info.add_range(start, end)
 
+    # TODO: get context from mapped source files
     for info in list(line_infos.values()):
         if before > 0:
             for lineno in range(max(info.lineno - before, 1), info.lineno):
