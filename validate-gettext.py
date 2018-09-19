@@ -43,7 +43,7 @@ LEX = re.compile(
     r'((?i:(?:[LuU]|u8)?"(?:[^"\n\\]|\\[\\?"'+"'"+r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*"|R"[^\n"]*"))|' + # string
     r"((?i:(?:[LuU]|u8)?'(?:[^'\n\\]|\\[\\?'"+'"'+r"rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*'))|" + # char (yes they can be more than on character in C)
     r'([_a-z][_a-z0-9]*)|' +        # identifier
-    r'(/\*(?:[^*]|\*[^/])*\*/)|' +  # multiline comment
+    r'(/\*(?:[^*]|\*(?!/))*\*/)|' +  # multiline comment
     r'(//[^\n]*)|' +                # single line comment
     r'([ \v\t\r\n]+)|' +            # space
     r'([-+]?[0-9]+(?:\.[0-9]*)?(?:e[-+]?[0-9]+)?i?|[-+]?0x[0-9a-f]+|[-+]?[0-9]*\.[0-9]+(?:e[-+]?[0-9]+)?i?)|' + # numbers
