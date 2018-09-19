@@ -13,7 +13,11 @@ Note
 This tries to only match calls to the global `_()` function. It can distinguish
 between `_()`, `::_()`, `foo._()`, `foo->_()`, and `foo::_()` and will only
 match the first two. However, it cannot detect if `_` is a local variable or a
-member, because that would require a full blown C++ parser.
+class member, because that would require a full blown Objective-C++ parser. It
+tries a bit to detect if its the `_()` is part of a function
+declaration/definition, but again, you would need a full blown Objective-C++
+parser to detect this (because you need to know if `foo` in `foo* _();` is
+a type or a variable).
 
 This doesn't correctly parse parameters that use C++ templates with multiple
 template parameters. See:

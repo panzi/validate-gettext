@@ -48,7 +48,7 @@ LEX = re.compile(
     r'([ \v\t\r\n]+)|' +            # space
     r'([-+]?[0-9]+(?:\.[0-9]*)?(?:e[-+]?[0-9]+)?i?|[-+]?0x[0-9a-f]+|[-+]?[0-9]*\.[0-9]+(?:e[-+]?[0-9]+)?i?)|' + # numbers
     r'(@[_a-z][_a-z0-9]*)|' + # tag
-    r'([-+*/%&|^!=<>]=|<<=?|>>=?|\|\||&&|->|\.\.\.|--|\+\+|##|::|[-+./*,!^~<>|&?:%=;])|' + # operators
+    r'([-+*/%&|^!=<>]=|<<=?|>>=?|\|\||&&|->|\.\.\.|--|\+\+|##|::|[-+./*,!^~<>|&?:%=;@])|' + # operators
     r'([{}()\[\]])|' + # brackets
     r'(#(?:\\\n|[^\n])*)', # preproc
     re.M | re.I)
@@ -623,7 +623,14 @@ def _gettext(node, func_defs):
                             continue
 
                 elif prev.tok == TOK.IDENT and prev.val not in EXPR_KEYWORDS:
-                    # function declaration/definition
+                    # function declaration/definition `foo _()`
+                    i += 1
+                    continue
+
+            if i + 1 < len(node.tokens):
+                next_tok = node.tokens[i + 1]
+                if next_tok.tok == TOK.BRACKET and next_tok.tokens[0].val == '{':
+                    # function declaration/definition `_() {`
                     i += 1
                     continue
 
