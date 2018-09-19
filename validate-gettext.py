@@ -517,13 +517,14 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
     return ok
 
 class LineInfo:
-    __slots__ = 'lineno', 'map_lineno', 'line', 'ranges'
+    __slots__ = 'lineno', 'map_lineno', 'line', 'map_filename', 'ranges'
 
-    def __init__(self, lineno, map_lineno, line):
+    def __init__(self, lineno, map_lineno, line, map_filename):
         self.lineno     = lineno
         self.map_lineno = map_lineno
         self.line       = line
         self.ranges     = []
+        self.map_filename = map_filename
     
     def add_range(self, start, end):
         i = 0
@@ -561,8 +562,9 @@ def gather_lines(lines, toks, before=0, after=0):
         start_lineno = tok.lineno
         end_lineno = tok.end_lineno
         if tok.source_map:
-            map_start_lineno = tok.source_map[1]
+            map_filename, map_start_lineno = tok.source_map
         else:
+            map_filename = None
             map_start_lineno = start_lineno
         for lineno in range(start_lineno, end_lineno + 1):
             map_lineno = lineno - start_lineno + map_start_lineno
@@ -574,7 +576,7 @@ def gather_lines(lines, toks, before=0, after=0):
                 line = info.line + line[len(info.line):]
                 info.line = line
             else:
-                info = LineInfo(lineno, map_lineno, line)
+                info = LineInfo(lineno, map_lineno, line, map_filename)
                 line_infos[map_lineno] = info
 
             start = 0 if lineno > start_lineno else tok.column - 1
@@ -586,17 +588,24 @@ def gather_lines(lines, toks, before=0, after=0):
 
             info.add_range(start, end)
 
-    # TODO: get context from mapped source files
+    map_files = {None: lines}
     for info in list(line_infos.values()):
+        if info.map_filename in map_files:
+            map_lines = map_files[info.map_filename]
+        else:
+            with open(info.map_filename) as fp:
+                map_lines = split_lines(fp.read())
+            map_files[info.map_filename] = map_lines
+
         if before > 0:
-            for lineno in range(max(info.lineno - before, 1), info.lineno):
+            for lineno in range(max(info.map_lineno - before, 1), info.map_lineno):
                 if lineno not in line_infos:
-                    line_infos[lineno] = LineInfo(lineno, lineno - info.lineno + info.map_lineno, lines[lineno - 1])
+                    line_infos[lineno] = LineInfo(info.lineno, lineno, map_lines[lineno - 1], info.map_filename)
 
         if after > 0:
-            for lineno in range(info.lineno + 1, min(info.lineno + after, len(lines)) + 1):
+            for lineno in range(info.map_lineno + 1, min(info.map_lineno + after, len(map_lines)) + 1):
                 if lineno not in line_infos:
-                    line_infos[lineno] = LineInfo(lineno, lineno - info.lineno + info.map_lineno, lines[lineno - 1])
+                    line_infos[lineno] = LineInfo(info.lineno, lineno, map_lines[lineno - 1], info.map_filename)
 
     return [line_infos[lineno] for lineno in sorted(line_infos)]
 
