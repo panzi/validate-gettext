@@ -3,6 +3,7 @@
 	_("this is ignored")
 
 void _(void *key, ...) {}
+void gettext(void *key) {}
 
 void other() {
 	return _("known");
@@ -26,7 +27,7 @@ void main() {
 	puts(_(u8"another" "illegal" L"concatenation"));
 
 	puts(_("another" L" known " "key"));
-	puts(_("key with umlauts äÖü"));
+	puts(gettext("key with umlauts äÖü"));
 	puts(_(L"key with umlauts äÖü"));
 	puts(_(u8"key with umlauts äÖü"));
 
@@ -53,9 +54,13 @@ void main() {
 _(variable);
 			_();
 
-	_("known");
+	gettext("known");
 
 	std::_("this should not");
 
 	printf("%s\n", _("foo bar %c", '\0'));
+
+	printf(_("foo %s", 1 + 2, 2, 3, (
+		4 * 10
+	), 5, "  foo  bar  ", func(1, 2, 3)));
 }

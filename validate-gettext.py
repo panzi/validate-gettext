@@ -413,45 +413,61 @@ def split_lines(s):
         lines.append("")
     return lines
 
-def validate_gettext(s, filename, valid_keys, func_name='_', only_errors=False, before=0, after=0, color=True):
+def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, before=0, after=0, color=True):
     lines = split_lines(s)
     ok = True
     try:
-        for ident_tok, args_tok in gettext(s, func_name):
+        for ident_tok, args_tok, (min_argc, max_argc, key_index) in gettext(s, func_defs):
             args = parse_comma_list(args_tok.tokens[1:-1])
-            if not args:
-                print_mark(filename, lines, [ident_tok, args_tok], "no arguments", before=before, after=after, color=color)
+            argc = len(args)
+            if argc < min_argc:
+                print_mark(filename, lines, [ident_tok, *(args if args else args_tok.tokens)],
+                    "not enough arguments (minimum are %d, but got %d)" % (min_argc, argc),
+                    before=before, after=after, color=color)
                 ok = False
+
+            elif max_argc is not None and argc > max_argc:
+                print_mark(filename, lines, [ident_tok, *args[max_argc:]],
+                    "too many arguments (maximum are %d, but got %d)" % (max_argc, argc),
+                    before=before, after=after, color=color)
+                ok = False
+
             else:
-                arg0 = args[0]
-                if arg0.is_strings():
+                key_arg = args[key_index]
+                if key_arg.is_strings():
                     try:
-                        arg0_str = parse_strings(arg0.tokens)
+                        key = parse_strings(key_arg.tokens)
                     except ParserError as e:
                         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
                         print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
                         ok = False
+
                     else:
-                        if arg0_str not in valid_keys:
-                            print_mark(filename, lines, arg0.tokens, "not a know string key", before=before, after=after, color=color)
+                        if key not in valid_keys:
+                            print_mark(filename, lines, key_arg.tokens, "not a know string key",
+                                before=before, after=after, color=color)
                             ok = False
+
                         elif not only_errors:
                             print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation",
                                 mark_color=GREEN, before=before, after=after, color=color)
-                            print("\tparsed string key: %r" % arg0_str)
+                            print("\tparsed string key: %r" % key)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
                 else:
-                    print_mark(filename, lines, arg0.tokens, "not a string literal", before=before, after=after, color=color)
+                    print_mark(filename, lines, key_arg.tokens, "not a string literal",
+                        before=before, after=after, color=color)
                     ok = False
 
     except UnbalancedParenthesisError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
         print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
 
-        illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column, ILLEGAL, e.other_str_slice(lines))
-        print_mark(filename, lines, [illegal], "open bracket was here", before=before, after=after, color=color)
+        illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column,
+            ILLEGAL, e.other_str_slice(lines))
+        print_mark(filename, lines, [illegal], "open bracket was here",
+            before=before, after=after, color=color)
         ok = False
 
     except ParserError as e:
@@ -466,7 +482,7 @@ class LineInfo:
 
     def __init__(self, lineno, line):
         self.lineno = lineno
-        self.line = line
+        self.line   = line
         self.ranges = []
     
     def add_range(self, start, end):
@@ -486,7 +502,7 @@ class LineInfo:
                             end = next_end
                             self.ranges[i - 1][1] = end
                     else:
-                        i += 1
+                        break
                 return
             elif start <= o_start and end >= o_start:
                 self.ranges[i][0] = start
@@ -536,11 +552,24 @@ def gather_lines(lines, toks, before=0, after=0):
 
     return [line_infos[lineno] for lineno in sorted(line_infos)]
 
+def _flatten_tree(nodes, flat):
+    for node in nodes:
+        if node.tok == TREE:
+            _flatten_tree(node.tokens, flat)
+        else:
+            flat.append(node)
+
+def flatten_tree(nodes):
+    flat = []
+    _flatten_tree(nodes, flat)
+    return flat
+
 def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
     if color:
         normal = NORMAL
     else:
         mark_color = lineno_color = normal = ""
+    toks = flatten_tree(toks)
     line_padd = 1 + len(str(toks[-1].end_lineno))
     print("%s:%d:%d: %s" % (filename, toks[0].lineno, toks[0].column, message))
     infos = gather_lines(lines, toks, before, after)
@@ -569,13 +598,13 @@ def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE
             print(''.join(buf))
     print()
 
-def gettext(s, func_name='_'):
+def gettext(s, func_defs='_'):
     node = parse(s)
-    yield from _gettext(node, func_name)
+    yield from _gettext(node, func_defs)
 
 EXPR_KEYWORS = frozenset(['return', 'case', 'goto', 'sizeof', '__typeof__', '__typeof', 'typeof'])
 
-def _gettext(node, func_name):
+def _gettext(node, func_defs):
     i = 0
     while i < len(node.tokens):
         child = node.tokens[i]
@@ -603,22 +632,72 @@ def _gettext(node, func_name):
                     i += 1
                     continue
 
-            if child.val == func_name and i + 1 < len(node.tokens) and node.tokens[i + 1].tok == TREE:
+            func_def = func_defs.get(child.val)
+            if func_def is not None and i + 1 < len(node.tokens) and node.tokens[i + 1].tok == TREE:
                 next_child = node.tokens[i + 1]
                 if next_child.tokens[0].val == '(':
-                    yield child, next_child
+                    yield child, next_child, func_def
                     i += 1
 
         elif child.tok == TREE:
-            yield from _gettext(child, func_name)
+            yield from _gettext(child, func_defs)
         i += 1
+
+def parse_func_defs(s):
+    func_defs = {}
+
+    for str_def in s.split(','):
+        name, *args = str_def.split('/')
+        if name in func_defs:
+            raise KeyError('doubled function name: ' + name)
+
+        if not name:
+            raise ValueError('function name may not be empty')
+
+        min_argc  = 1
+        max_argc  = 1
+        key_index = 0
+
+        if args:
+            argc = args[0].split('-')
+            if len(argc) > 1:
+                min_argc = int(argc[0])
+                max_argc = int(argc[1]) if argc[1] != '*' else None
+            elif argc[0] == '*':
+                min_argc = 1
+                max_argc = None
+            else:
+                min_argc = max_argc = int(argc[0])
+
+            if min_argc < 1:
+                raise ValueError(
+                    'function %s: minimum argument count (%d) has to be bigger than 1' %
+                     (name, min_argc))
+
+            if max_argc is not None and max_argc < min_argc:
+                raise ValueError(
+                    'function %s: minimum argument count (%d) has to be smaller than maximum argument count (%d)' %
+                     (name, min_argc, max_argc))
+
+            if len(args) > 1:
+                key_index = int(args[1])
+
+            if max_argc is not None and key_index >= max_argc:
+                raise ValueError(
+                    'function %s: string key index (%d) has to be smaller than maximum argument count (%d)' %
+                     (name, key_index, max_argc))
+
+        func_defs[name] = (min_argc, max_argc, key_index)
+
+    return func_defs
 
 def main(args):
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('valid_keys')
     parser.add_argument('source', nargs='+')
-    parser.add_argument('--func-name', default='_')
+    parser.add_argument('--func-defs', default='_/1/0,gettext/1/0',
+        help='<FUNC_NAME>/<MIN_ARGC>-<MAX_ARGC>/<KEY_INDEX>,... e.g. _/1/0,gettext/1/0')
     parser.add_argument('--only-errors', default=False, action='store_true')
     parser.add_argument('--before', type=int, default=0)
     parser.add_argument('--after', type=int, default=0)
@@ -636,12 +715,18 @@ def main(args):
     else:
         color = opts.color == 'always'
 
+    try:
+        func_defs = parse_func_defs(opts.func_defs)
+    except (ValueError, KeyError) as e:
+        print(e)
+        return 2
+
     status = 0
     for source in opts.source:
         with open(source) as fp:
             s = fp.read()
         if not validate_gettext(s, source, valid_keys,
-                func_name = opts.func_name,
+                func_defs = func_defs,
                 only_errors = opts.only_errors,
                 before = opts.before,
                 after = opts.after,
