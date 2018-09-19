@@ -2,6 +2,7 @@
 
 import re
 import sys
+import enum
 import string
 
 RED     = "\x1b[31m"
@@ -39,8 +40,8 @@ CLOSE_BRACKETS = frozenset(CLOSE_BRACKET_MAP.values())
 
 # TODO: support new C++ custom literals
 LEX = re.compile(
-    r'((?i:(?:[LuU]|u8)?"(?:[^"\n\\]|\\[?"'+"'"+r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*"|R"[^\n"]*"))|' + # string
-    r"((?i:(?:[LuU]|u8)?'(?:[^'\n\\]|\\[?'"+'"'+r"rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*'))|" + # char (yes they can be more than on character in C)
+    r'((?i:(?:[LuU]|u8)?"(?:[^"\n\\]|\\[\\?"'+"'"+r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*"|R"[^\n"]*"))|' + # string
+    r"((?i:(?:[LuU]|u8)?'(?:[^'\n\\]|\\[\\?'"+'"'+r"rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*'))|" + # char (yes they can be more than on character in C)
     r'([_a-z][_a-z0-9]*)|' +        # identifier
     r'(/\*(?:[^*]|\*[^/])*\*/)|' +  # multiline comment
     r'(//[^\n]*)|' +                # single line comment
@@ -52,22 +53,23 @@ LEX = re.compile(
     r'(#(?:\\\n|[^\n])*)', # preproc
     re.M | re.I)
 
-STRING = 1
-CHAR   = 2
-IDENT  = 3
-ML_COMMENT = 4
-COMMENT = 5
-SPACE = 6
-NUMBER = 7
-TAG = 8
-OPERATOR = 9
-BRACKET = 10
-PREPROC = 11
+class TOK(enum.IntEnum):
+    STRING     =  1
+    CHAR       =  2
+    IDENT      =  3
+    ML_COMMENT =  4
+    COMMENT    =  5
+    SPACE      =  6
+    NUMBER     =  7
+    TAG        =  8
+    OPERATOR   =  9
+    BRACKET    = 10
+    PREPROC    = 11
 
-TREE = -1
-ILLEGAL = -2
+    TREE    = -1
+    ILLEGAL = -2
 
-TOKENS = (IDENT, STRING, CHAR, ML_COMMENT, COMMENT, SPACE, OPERATOR, BRACKET, NUMBER, TAG, PREPROC)
+TOKENS = tuple(TOK.__members__.values())
 
 STR_PART = re.compile(r'([^"\n\\])|\\([?"'+"'"+r'rnabfvt])|\\([0-9]{1,3})|\\x([0-9a-fA-F]{2})|\\U([0-9a-fA-F]{8})|\\u([0-9a-fA-F]{4})')
 RAW_STR  = re.compile(r'^R"([^"]*)"$')
@@ -85,7 +87,7 @@ ESC_SIMPLE = {
     't': '\t',
 }
 
-def _parse_string_repl(m):
+def _parse_string_token_repl(m):
     if m.group(1):
         return m.group(1)
     elif m.group(2):
@@ -100,7 +102,7 @@ def _parse_string_repl(m):
         return chr(int(m.group(6), 16))
     assert(False)
 
-def parse_string(val):
+def parse_string_token(val):
     if not val.endswith('"'):
         # TODO: C++ custom string literals
         raise SyntaxError('illegal string literal: ' + val)
@@ -125,26 +127,26 @@ def parse_string(val):
     else:
         raise SyntaxError('illegal string literal: ' + val)
 
-    return prefix, STR_PART.sub(_parse_string_repl, s)
+    return prefix, STR_PART.sub(_parse_string_token_repl, s)
 
 def _prefix_msg(prefix):
     return "string literal prefix " + prefix if prefix else "no string literal prefix"
 
 def first_atom(node):
-    if node.tok != TREE:
+    if node.tok != TOK.TREE:
         return node
     return first_atom(node.tokens[0])
 
-def parse_strings(tokens):
+def parse_string(tokens):
     # NOTE: this accepts concatenation of incompatible string literlas, like: L"foo" "bar"
     buf = []
     prefix = None
     for tok in tokens:
-        if tok.tok != STRING:
+        if tok.tok != TOK.STRING:
             raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column,
                 "string literal", first_atom(tok).val)
         try:
-            p, val = parse_string(tok.val)
+            p, val = parse_string_token(tok.val)
         except SyntaxError as e:
             raise ParserError(tok.lineno, tok.column, tok.end_lineno, tok.end_column, str(e))
         if prefix is None:
@@ -175,10 +177,10 @@ def tokens(s):
             end_lineno = lineno
             end_column = column + len(val)
 
-        for TOK in TOKENS:
-            val = m.group(TOK)
+        for tok in TOKENS:
+            val = m.group(tok)
             if val is not None:
-                yield Atom(lineno, column, end_lineno, end_column, TOK, val)
+                yield Atom(lineno, column, end_lineno, end_column, TOK(tok), val)
                 break
 
         lineno = end_lineno
@@ -234,7 +236,7 @@ class Tree(Node):
 
     def __init__(self):
         self.tokens = []
-        self.tok = TREE
+        self.tok = TOK.TREE
 
     def __str__(self):
         return join_tokens(self.tokens)
@@ -254,15 +256,6 @@ class Tree(Node):
     @property
     def end_column(self):
         return self.tokens[-1].end_column
-
-    def is_strings(self):
-        if not self.tokens:
-            return False
-
-        for tok in self.tokens:
-            if tok.tok != STRING:
-                return False
-        return True
 
 class ParserError(Exception):
     def __init__(self, lineno, column, end_lineno, end_column, message):
@@ -302,14 +295,16 @@ class UnbalancedParenthesisError(ParserError):
     def other_str_slice(self, lines):
         return ''.join(self.other_slice(lines))
 
+IGNORE_TOKS = frozenset([TOK.ML_COMMENT, TOK.COMMENT, TOK.SPACE])
+
 def parse(s):
     node = Tree()
     stack = []
     for atom in tokens(s):
-        if atom.tok in (ML_COMMENT, COMMENT, SPACE):
+        if atom.tok in IGNORE_TOKS:
             continue
 
-        if atom.tok == BRACKET:
+        if atom.tok == TOK.BRACKET:
             val = atom.val
             if val in OPEN_BRACKETS:
                 stack.append(node)
@@ -324,7 +319,7 @@ def parse(s):
                         child.lineno, child.column, child.end_lineno, child.end_column,
                         'unexpected %s' % val)
                 other = node.tokens[0]
-                if other.tok != BRACKET:
+                if other.tok != TOK.BRACKET:
                     raise ParserError(
                         child.lineno, child.column, child.end_lineno, child.end_column,
                         'unexpected %s' % val)
@@ -356,7 +351,7 @@ def find_last_tree(node):
         if not node.tokens:
             return node
         child = node.tokens[-1]
-        if child.tok != TREE:
+        if child.tok != TOK.TREE:
             return node
         node = child
 
@@ -366,7 +361,7 @@ def parse_comma_list(tokens):
         node = Tree()
         parsed.append(node)
         for tok in tokens:
-            if tok.tok == OPERATOR and tok.val == ',':
+            if tok.tok == TOK.OPERATOR and tok.val == ',':
                 if not node.tokens:
                     raise UnexpectedTokenError(tok.lineno, tok.column,
                         tok.end_lineno, tok.end_column, "an expression", tok.val)
@@ -434,11 +429,11 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
 
             else:
                 key_arg = args[key_index]
-                if key_arg.is_strings():
+                if key_arg.tokens:
                     try:
-                        key = parse_strings(key_arg.tokens)
+                        key = parse_string(key_arg.tokens)
                     except ParserError as e:
-                        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+                        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
                         print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
                         ok = False
 
@@ -456,22 +451,22 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
                                 print("\targument %d: %s" % (argind, arg))
                             print()
                 else:
-                    print_mark(filename, lines, key_arg.tokens, "not a string literal",
+                    print_mark(filename, lines, key_arg.tokens, "expected a string literal",
                         before=before, after=after, color=color)
                     ok = False
 
     except UnbalancedParenthesisError as e:
-        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
         print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
 
         illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column,
-            ILLEGAL, e.other_str_slice(lines))
+            TOK.ILLEGAL, e.other_str_slice(lines))
         print_mark(filename, lines, [illegal], "open bracket was here",
             before=before, after=after, color=color)
         ok = False
 
     except ParserError as e:
-        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, ILLEGAL, e.str_slice(lines))
+        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
         print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
         ok = False
 
@@ -554,7 +549,7 @@ def gather_lines(lines, toks, before=0, after=0):
 
 def _flatten_tree(nodes, flat):
     for node in nodes:
-        if node.tok == TREE:
+        if node.tok == TOK.TREE:
             _flatten_tree(node.tokens, flat)
         else:
             flat.append(node)
@@ -608,13 +603,13 @@ def _gettext(node, func_defs):
     i = 0
     while i < len(node.tokens):
         child = node.tokens[i]
-        if child.tok == IDENT:
+        if child.tok == TOK.IDENT:
             # NOTE: This can distinguish between _() and foo->_() / foo._() / foo::_(),
             #       but it cannot detect if _ is a local variable, since that would
             #       need a full blown Objective-C++ parser.
             if i > 0:
                 prev = node.tokens[i - 1]
-                if prev.tok == OPERATOR:
+                if prev.tok == TOK.OPERATOR:
                     if prev.val in ('->', '.'):
                         # method invocation
                         i += 1
@@ -623,23 +618,23 @@ def _gettext(node, func_defs):
                     if i - 1 > 0 and prev.val == '::':
                         # C++ namespaced function invocation
                         prev = node.tokens[i - 2]
-                        if prev.tok == IDENT:
+                        if prev.tok == TOK.IDENT:
                             i += 1
                             continue
 
-                elif prev.tok == IDENT and prev.val not in EXPR_KEYWORDS:
+                elif prev.tok == TOK.IDENT and prev.val not in EXPR_KEYWORDS:
                     # function declaration/definition
                     i += 1
                     continue
 
             func_def = func_defs.get(child.val)
-            if func_def is not None and i + 1 < len(node.tokens) and node.tokens[i + 1].tok == TREE:
+            if func_def is not None and i + 1 < len(node.tokens) and node.tokens[i + 1].tok == TOK.TREE:
                 next_child = node.tokens[i + 1]
                 if next_child.tokens[0].val == '(':
                     yield child, next_child, func_def
                     i += 1
 
-        elif child.tok == TREE:
+        elif child.tok == TOK.TREE:
             yield from _gettext(child, func_defs)
         i += 1
 
