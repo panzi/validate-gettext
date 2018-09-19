@@ -50,7 +50,8 @@ LEX = re.compile(
     r'(@[_a-z][_a-z0-9]*)|' + # tag
     r'([-+*/%&|^!=<>]=|<<=?|>>=?|\|\||&&|->|\.\.\.|--|\+\+|##|::|[-+./*,!^~<>|&?:%=;@])|' + # operators
     r'([{}()\[\]])|' + # brackets
-    r'(#(?:\\\n|[^\n])*)', # preproc
+    r'(#(?:\\\n|[^\n])*)|' +
+    r'(\\\n)', # line continuation
     re.M | re.I)
 
 class TOK(enum.IntEnum):
@@ -65,11 +66,14 @@ class TOK(enum.IntEnum):
     OPERATOR   =  9
     BRACKET    = 10
     PREPROC    = 11
+    LINE_CONT  = 12
 
     TREE    = -1
     ILLEGAL = -2
 
 TOKENS = tuple(TOK.__members__.values())
+
+IGNORE_TOKS = frozenset([TOK.ML_COMMENT, TOK.COMMENT, TOK.SPACE, TOK.LINE_CONT])
 
 STR_PART = re.compile(r'([^"\n\\])|\\([?"'+"'"+r'rnabfvt])|\\([0-9]{1,3})|\\x([0-9a-fA-F]{2})|\\U([0-9a-fA-F]{8})|\\u([0-9a-fA-F]{4})')
 RAW_STR  = re.compile(r'^R"([^"]*)"$')
@@ -132,10 +136,10 @@ def parse_string_token(val):
 def _prefix_msg(prefix):
     return "string literal prefix " + prefix if prefix else "no string literal prefix"
 
-def first_atom(node):
+def find_first_atom(node):
     if node.tok != TOK.TREE:
         return node
-    return first_atom(node.tokens[0])
+    return find_first_atom(node.tokens[0])
 
 def parse_string(tokens):
     # NOTE: this accepts concatenation of incompatible string literlas, like: L"foo" "bar"
@@ -144,7 +148,7 @@ def parse_string(tokens):
     for tok in tokens:
         if tok.tok != TOK.STRING:
             raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column,
-                "string literal", first_atom(tok).val)
+                "string literal", find_first_atom(tok).val)
         try:
             p, val = parse_string_token(tok.val)
         except SyntaxError as e:
@@ -295,8 +299,6 @@ class UnbalancedParenthesisError(ParserError):
     def other_str_slice(self, lines):
         return ''.join(self.other_slice(lines))
 
-IGNORE_TOKS = frozenset([TOK.ML_COMMENT, TOK.COMMENT, TOK.SPACE])
-
 def parse(s):
     node = Tree()
     stack = []
@@ -392,8 +394,8 @@ def join_tokens(tokens):
 
 def slice_lines(lines, start_lineno, start_column, end_lineno, end_column):
     buf = []
-    for i in range(start_lineno, end_lineno + 1):
-        if i == end_lineno:
+    for i in range(start_lineno - 1, min(len(lines), end_lineno)):
+        if i + 1 == end_lineno:
             buf.append(lines[i][start_column - 1 : end_column - 1])
         else:
             buf.append(lines[i][start_column - 1:])
@@ -521,7 +523,7 @@ def gather_lines(lines, toks, before=0, after=0):
                 line = info.line
             else:
                 line_index = lineno - 1
-                line = lines[line_index]
+                line = lines[line_index] if line_index != len(lines) else ''
                 info = LineInfo(lineno, line)
                 line_infos[lineno] = info
 
@@ -628,8 +630,8 @@ def _gettext(node, func_defs):
                     continue
 
             if i + 1 < len(node.tokens):
-                next_tok = node.tokens[i + 1]
-                if next_tok.tok == TOK.BRACKET and next_tok.tokens[0].val == '{':
+                next_tok = find_first_atom(node.tokens[i + 1])
+                if next_tok.tok == TOK.BRACKET and next_tok.val == '{':
                     # function declaration/definition `_() {`
                     i += 1
                     continue
