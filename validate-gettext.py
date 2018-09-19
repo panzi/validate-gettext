@@ -693,15 +693,38 @@ def parse_func_defs(s):
 
 def main(args):
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('valid_keys')
-    parser.add_argument('source', nargs='+')
+
+    parser = argparse.ArgumentParser(
+        prog='validate-gettext.py',
+        formatter_class=argparse.RawTextHelpFormatter)
+
+    parser.add_argument('valid_keys',
+        help='file with known gettext string keys, one key per line')
+
+    parser.add_argument('source', nargs='+',
+        help='C/C++/Objective-C source file')
+
     parser.add_argument('--func-defs', default='_/1/0,gettext/1/0',
-        help='<FUNC_NAME>/<MIN_ARGC>-<MAX_ARGC>/<KEY_INDEX>,... e.g. _/1/0,gettext/1/0')
-    parser.add_argument('--only-errors', default=False, action='store_true')
-    parser.add_argument('--before', type=int, default=0)
-    parser.add_argument('--after', type=int, default=0)
-    parser.add_argument('--color', choices=['always', 'never', 'auto'], default='auto')
+        help='comma separated list of function definitions:\n'
+            '<FUNC_NAME>[/<MIN_ARGC>-<MAX_ARGC>[/<KEY_INDEX>]] or\n'
+            '<FUNC_NAME>[/<MIN_ARGC>-*[/<KEY_INDEX>]] or\n'
+            '<FUNC_NAME>[/<ARGC>[/<KEY_INDEX>]]\n'
+            '\n'
+            'Example:\n'
+            'validate-gettext.py --func-defs _/1/0,gettext/1/0 ...\n\n')
+
+    parser.add_argument('--only-errors', default=False, action='store_true',
+        help='show only errors, no valid gettext invokations')
+
+    parser.add_argument('--before', type=int, default=0, metavar='LINES',
+        help='lines of context before a marked source location to show')
+
+    parser.add_argument('--after', type=int, default=0, metavar='LINES',
+        help='lines of context after a marked source location to show')
+
+    parser.add_argument('--color', choices=['always', 'never', 'auto'], default='auto',
+        help='wether to colorize the output')
+
     opts = parser.parse_args(args)
 
     with open(opts.valid_keys) as fp:
