@@ -452,8 +452,8 @@ def split_lines(s):
         lines.append("")
     return lines
 
-def parse_source_map(lines):
-    map_files = {None: lines}
+def parse_source_map(filename, lines):
+    map_files = {filename: lines}
     map_src_lineno = 0
     src_lineno = 0
     map_lines = None
@@ -480,7 +480,7 @@ def parse_source_map(lines):
 
 def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, before=0, after=0, color=True):
     lines = split_lines(s)
-    map_files = parse_source_map(lines)
+    map_files = parse_source_map(filename, lines)
     src_files = {filename: lines}
     ok = True
     opts = dict(
@@ -492,13 +492,13 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
             args = parse_comma_list(args_tok.tokens[1:-1])
             argc = len(args)
             if argc < min_argc:
-                print_mark(filename, lines, [ident_tok, *(args if args else args_tok.tokens)],
+                print_mark(filename, [ident_tok, *(args if args else args_tok.tokens)],
                     "not enough arguments (minimum are %d, but got %d)" % (min_argc, argc),
                     **opts)
                 ok = False
 
             elif max_argc is not None and argc > max_argc:
-                print_mark(filename, lines, [ident_tok, *args[max_argc:]],
+                print_mark(filename, [ident_tok, *args[max_argc:]],
                     "too many arguments (maximum are %d, but got %d)" % (max_argc, argc),
                     **opts)
                 ok = False
@@ -510,40 +510,40 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
                         key = parse_string(key_arg.tokens)
                     except ParserError as e:
                         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-                        print_mark(filename, lines, [illegal], str(e), **opts)
+                        print_mark(filename, [illegal], str(e), **opts)
                         ok = False
 
                     else:
                         if key not in valid_keys:
-                            print_mark(filename, lines, key_arg.tokens, "not a know string key",
+                            print_mark(filename, key_arg.tokens, "not a know string key",
                                 **opts)
                             ok = False
 
                         elif not only_errors:
-                            print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation",
+                            print_mark(filename, [ident_tok, *args_tok.tokens], "valid gettext invocation",
                                 mark_color=GREEN, **opts)
                             print("\tparsed string key: %r" % key)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
                 else:
-                    print_mark(filename, lines, key_arg.tokens, "expected a string literal",
+                    print_mark(filename, key_arg.tokens, "expected a string literal",
                         **opts)
                     ok = False
 
     except UnbalancedParenthesisError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e), **opts)
+        print_mark(filename, [illegal], str(e), **opts)
 
         illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column,
             TOK.ILLEGAL, e.other_str_slice(lines))
-        print_mark(filename, lines, [illegal], "open bracket was here",
+        print_mark(filename, [illegal], "open bracket was here",
             **opts)
         ok = False
 
     except ParserError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e), **opts)
+        print_mark(filename, [illegal], str(e), **opts)
         ok = False
 
     return ok
@@ -587,13 +587,13 @@ class LineInfo:
             i += 1
         self.ranges.append([start, end])
 
-def gather_lines(lines, toks, map_files, src_files, before=0, after=0):
+def gather_lines(filename, toks, map_files, src_files, before=0, after=0):
     line_infos = {}
     for tok in toks:
         if tok.source_map:
             map_filename = tok.source_map[0]
         else:
-            map_filename = None
+            map_filename = filename
 
         start_lineno, start_column = tok.start_pos()
         end_lineno, end_column = tok.end_pos()
@@ -651,7 +651,7 @@ def flatten_tree(nodes):
     _flatten_tree(nodes, flat)
     return flat
 
-def print_mark(filename, lines, toks, message, map_files, src_files, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
+def print_mark(filename, toks, message, map_files, src_files, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
     if color:
         normal = NORMAL
     else:
@@ -669,7 +669,7 @@ def print_mark(filename, lines, toks, message, map_files, src_files, mark_color=
         map_filename = filename
 
     print("%s:%d:%d: %s" % (map_filename, first_lineno, first_column, message))
-    infos = gather_lines(lines, toks, map_files, src_files, before, after)
+    infos = gather_lines(filename, toks, map_files, src_files, before, after)
     for info in infos:
         line = info.line
         str_lineno = str(info.lineno)

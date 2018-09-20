@@ -1,8 +1,9 @@
 #include <stdio.h>
 #define FOO \
-	_("this " \
-	  "is " \
-	  "ignored")
+	/* ignored here */ \
+	_("but " \
+	  "found " \
+	  "where the macro is used")
 
 const char *_(void *key, ...) { return NULL; }
 const char *gettext(void *key) { return NULL; }
