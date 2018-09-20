@@ -1,9 +1,11 @@
 #include <stdio.h>
 #define FOO \
-	_("this is ignored")
+	_("this " \
+	  "is " \
+	  "ignored")
 
-void _(void *key, ...) {}
-void gettext(void *key) {}
+const char *_(void *key, ...) { return NULL; }
+const char *gettext(void *key) { return NULL; }
 
 void other() {
 	return _("known");
@@ -19,10 +21,17 @@ void main() {
 			"should be found \0 \12 \u00a0 \U0000000A \t \x20 \r\n\v\b\f", a, b, c
 	
 	);
-
+	printf("%s %d", FOO, 1);
 	puts("known");
 	puts("unknown");
 
+	printf("%s %d %d %d", _(
+#if 0
+		"foo"),
+#else
+		"bar"),
+#endif
+		1, 2);
 	puts(_(L"illegal" U"concatenation"));
 	puts(_(u8"another" "illegal" L"concatenation"));
 

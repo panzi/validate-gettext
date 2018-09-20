@@ -177,7 +177,7 @@ class SourceMap:
 SOURCE_MAP = re.compile(r'^#[ \t]*(\d+)[ \t]*("(?:[^"\n\\]|\\[\\?"'+"'"+
     r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2})*")[ \t]*(?:(\d+)(?:[ \t]*(\d+))?)?')
 
-def parse_source_map(lineno, src):
+def parse_source_map_line(lineno, src):
     m = SOURCE_MAP.match(src)
     _, filename = parse_string_token(m.group(2))
     return SourceMap(filename, lineno + 1, int(m.group(1)))
@@ -210,7 +210,7 @@ def tokens(s):
                 atom = Atom(lineno, column, end_lineno, end_column, TOK(tok), val,
                     source_map.pos(lineno) if source_map is not None else None)
                 if atom.tok == TOK.SOURCE_MAP:
-                    source_map = parse_source_map(lineno, val)
+                    source_map = parse_source_map_line(lineno, val)
                 else:
                     yield atom
                 break
@@ -272,7 +272,7 @@ class Atom(Node):
 
     def end_pos(self):
         if self.source_map:
-            _, map_lineno, _ = self.source_map
+            _, map_lineno = self.source_map
             return (self.end_lineno - self.lineno + map_lineno, self.end_column)
         else:
             return (self.end_lineno, self.end_column)
@@ -452,9 +452,41 @@ def split_lines(s):
         lines.append("")
     return lines
 
+def parse_source_map(lines):
+    map_files = {None: lines}
+    map_src_lineno = 0
+    src_lineno = 0
+    map_lines = None
+    for i, line in enumerate(lines):
+        lineno = i + 1
+        m = SOURCE_MAP.match(line)
+        if m:
+            _, map_filename = parse_string_token(m.group(2))
+            src_lineno = lineno + 1
+            map_src_lineno = int(m.group(1))
+            if map_filename in map_files:
+                map_lines = map_files[map_filename]
+            else:
+                map_lines = map_files[map_filename] = []
+        elif map_lines is not None:
+            map_lineno = lineno - src_lineno + map_src_lineno
+            map_line_index = map_lineno - 1
+            while map_line_index >= len(map_lines):
+                map_lines.append('')
+            map_line = map_lines[map_line_index] # pylint: disable=E1136
+            map_lines[map_line_index] = map_line + line[len(map_line):] # pylint: disable=E1137
+
+    return map_files
+
 def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, before=0, after=0, color=True):
     lines = split_lines(s)
+    map_files = parse_source_map(lines)
+    src_files = {filename: lines}
     ok = True
+    opts = dict(
+        map_files=map_files, src_files=src_files,
+        before=before, after=after, color=color
+    )
     try:
         for ident_tok, args_tok, (min_argc, max_argc, key_index) in gettext(s, func_defs):
             args = parse_comma_list(args_tok.tokens[1:-1])
@@ -462,13 +494,13 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
             if argc < min_argc:
                 print_mark(filename, lines, [ident_tok, *(args if args else args_tok.tokens)],
                     "not enough arguments (minimum are %d, but got %d)" % (min_argc, argc),
-                    before=before, after=after, color=color)
+                    **opts)
                 ok = False
 
             elif max_argc is not None and argc > max_argc:
                 print_mark(filename, lines, [ident_tok, *args[max_argc:]],
                     "too many arguments (maximum are %d, but got %d)" % (max_argc, argc),
-                    before=before, after=after, color=color)
+                    **opts)
                 ok = False
 
             else:
@@ -478,53 +510,52 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
                         key = parse_string(key_arg.tokens)
                     except ParserError as e:
                         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-                        print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
+                        print_mark(filename, lines, [illegal], str(e), **opts)
                         ok = False
 
                     else:
                         if key not in valid_keys:
                             print_mark(filename, lines, key_arg.tokens, "not a know string key",
-                                before=before, after=after, color=color)
+                                **opts)
                             ok = False
 
                         elif not only_errors:
                             print_mark(filename, lines, [ident_tok, *args_tok.tokens], "valid gettext invocation",
-                                mark_color=GREEN, before=before, after=after, color=color)
+                                mark_color=GREEN, **opts)
                             print("\tparsed string key: %r" % key)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
                 else:
                     print_mark(filename, lines, key_arg.tokens, "expected a string literal",
-                        before=before, after=after, color=color)
+                        **opts)
                     ok = False
 
     except UnbalancedParenthesisError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
+        print_mark(filename, lines, [illegal], str(e), **opts)
 
         illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column,
             TOK.ILLEGAL, e.other_str_slice(lines))
         print_mark(filename, lines, [illegal], "open bracket was here",
-            before=before, after=after, color=color)
+            **opts)
         ok = False
 
     except ParserError as e:
         illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-        print_mark(filename, lines, [illegal], str(e), before=before, after=after, color=color)
+        print_mark(filename, lines, [illegal], str(e), **opts)
         ok = False
 
     return ok
 
 class LineInfo:
-    __slots__ = 'lineno', 'map_lineno', 'line', 'map_filename', 'ranges'
+    __slots__ = 'lineno', 'line', 'filename', 'ranges'
 
-    def __init__(self, lineno, map_lineno, line, map_filename):
-        self.lineno     = lineno
-        self.map_lineno = map_lineno
-        self.line       = line
-        self.ranges     = []
-        self.map_filename = map_filename
+    def __init__(self, lineno, line, filename):
+        self.lineno   = lineno
+        self.line     = line
+        self.ranges   = []
+        self.filename = filename
     
     def add_range(self, start, end):
         i = 0
@@ -556,56 +587,55 @@ class LineInfo:
             i += 1
         self.ranges.append([start, end])
 
-def gather_lines(lines, toks, before=0, after=0):
+def gather_lines(lines, toks, map_files, src_files, before=0, after=0):
     line_infos = {}
     for tok in toks:
-        start_lineno = tok.lineno
-        end_lineno = tok.end_lineno
         if tok.source_map:
-            map_filename, map_start_lineno = tok.source_map
+            map_filename = tok.source_map[0]
         else:
             map_filename = None
-            map_start_lineno = start_lineno
+
+        start_lineno, start_column = tok.start_pos()
+        end_lineno, end_column = tok.end_pos()
+
+        map_lines = map_files[map_filename]
         for lineno in range(start_lineno, end_lineno + 1):
-            map_lineno = lineno - start_lineno + map_start_lineno
             line_index = lineno - 1
-            line = lines[line_index] if line_index != len(lines) else ''
+            line = map_lines[line_index] if line_index != len(map_lines) else ''
 
-            if map_lineno in line_infos:
-                info = line_infos[map_lineno]
-                line = info.line + line[len(info.line):]
-                info.line = line
+            if lineno in line_infos:
+                info = line_infos[lineno]
             else:
-                info = LineInfo(lineno, map_lineno, line, map_filename)
-                line_infos[map_lineno] = info
+                info = LineInfo(lineno, line, map_filename)
+                line_infos[lineno] = info
 
-            start = 0 if lineno > start_lineno else tok.column - 1
+            start = 0 if lineno > start_lineno else start_column - 1
 
             if lineno < end_lineno:
                 end = len(line)
             else:
-                end = tok.end_column - 1
+                end = end_column - 1
 
             info.add_range(start, end)
 
-    map_files = {None: lines}
     for info in list(line_infos.values()):
-        if info.map_filename in map_files:
-            map_lines = map_files[info.map_filename]
+        if info.filename in src_files:
+            src_lines = src_files[info.filename]
         else:
-            with open(info.map_filename) as fp:
-                map_lines = split_lines(fp.read())
-            map_files[info.map_filename] = map_lines
+            with open(info.filename) as fp:
+                src_lines = split_lines(fp.read())
+
+            src_files[info.filename] = src_lines
 
         if before > 0:
-            for lineno in range(max(info.map_lineno - before, 1), info.map_lineno):
+            for lineno in range(max(info.lineno - before, 1), info.lineno):
                 if lineno not in line_infos:
-                    line_infos[lineno] = LineInfo(info.lineno, lineno, map_lines[lineno - 1], info.map_filename)
+                    line_infos[lineno] = LineInfo(lineno, src_lines[lineno - 1], info.filename)
 
         if after > 0:
-            for lineno in range(info.map_lineno + 1, min(info.map_lineno + after, len(map_lines)) + 1):
+            for lineno in range(info.lineno + 1, min(info.lineno + after, len(src_lines)) + 1):
                 if lineno not in line_infos:
-                    line_infos[lineno] = LineInfo(info.lineno, lineno, map_lines[lineno - 1], info.map_filename)
+                    line_infos[lineno] = LineInfo(lineno, src_lines[lineno - 1], info.filename)
 
     return [line_infos[lineno] for lineno in sorted(line_infos)]
 
@@ -621,7 +651,7 @@ def flatten_tree(nodes):
     _flatten_tree(nodes, flat)
     return flat
 
-def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
+def print_mark(filename, lines, toks, message, map_files, src_files, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
     if color:
         normal = NORMAL
     else:
@@ -639,10 +669,10 @@ def print_mark(filename, lines, toks, message, mark_color=RED, lineno_color=BLUE
         map_filename = filename
 
     print("%s:%d:%d: %s" % (map_filename, first_lineno, first_column, message))
-    infos = gather_lines(lines, toks, before, after)
+    infos = gather_lines(lines, toks, map_files, src_files, before, after)
     for info in infos:
         line = info.line
-        str_lineno = str(info.map_lineno)
+        str_lineno = str(info.lineno)
         print('%s%s%s |%s %s' % (lineno_color, ' ' * (line_padd - len(str_lineno)), str_lineno, normal, line.replace('\t', '    ')))
 
         if info.ranges:
@@ -670,12 +700,13 @@ def gettext(s, func_defs='_'):
     yield from _gettext(node, func_defs)
 
 EXPR_KEYWORDS = frozenset(['return', 'case', 'goto', 'sizeof', '__typeof__', '__typeof', 'typeof'])
+METHOD_SPECIFIERS = frozenset(['throw', 'noexcept', 'const'])
 
 def _gettext(node, func_defs):
     i = 0
     while i < len(node.tokens):
         child = node.tokens[i]
-        if child.tok == TOK.IDENT:
+        if child.tok == TOK.IDENT and i + 1 < len(node.tokens):
             # NOTE: This can distinguish between _() and foo->_() / foo._() / foo::_(),
             #       but it cannot detect if _ is a local variable, since that would
             #       need a full blown Objective-C++ parser.
@@ -699,19 +730,36 @@ def _gettext(node, func_defs):
                     i += 1
                     continue
 
-            if i + 1 < len(node.tokens):
-                next_tok = find_first_atom(node.tokens[i + 1])
-                if next_tok.tok == TOK.BRACKET and next_tok.val == '{':
+            args_tok = node.tokens[i + 1]
+
+            if args_tok.tok != TOK.TREE:
+                # no parenthesis `( )`
+                i += 1
+                continue
+
+            paren_tok = args_tok.tokens[0]
+            if paren_tok.tok != TOK.BRACKET or paren_tok.val != '(':
+                # still no parenthesis `( )`
+                i += 1
+                continue
+
+            if i + 2 < len(node.tokens):
+                next_atom = find_first_atom(node.tokens[i + 2])
+
+                if next_atom.tok == TOK.BRACKET and next_atom.val == '{':
                     # function declaration/definition `_() {`
                     i += 1
                     continue
 
-            func_def = func_defs.get(child.val)
-            if func_def is not None and i + 1 < len(node.tokens) and node.tokens[i + 1].tok == TOK.TREE:
-                next_child = node.tokens[i + 1]
-                if next_child.tokens[0].val == '(':
-                    yield child, next_child, func_def
+                elif next_atom.tok == TOK.IDENT and next_atom.val in METHOD_SPECIFIERS:
+                    # method declaration/definition `_() const` / `_() throw` / `_() noexcept`
                     i += 1
+                    continue
+
+            func_def = func_defs.get(child.val)
+            if func_def is not None:
+                yield child, args_tok, func_def
+                i += 1
 
         elif child.tok == TOK.TREE:
             yield from _gettext(child, func_defs)
