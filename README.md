@@ -7,6 +7,12 @@ Example output:
 
 ![](https://i.imgur.com/QzsdxsA.png)
 
+If you do fancy things with macros you might need to pass your source through
+macro expansion first. This tool will be able to read the source line markers
+and show you the issues in the actual source locations.
+
+	gcc -E -I/include/path source.c | ./validate-gettext.py known_strings.txt -
+
 Note
 ----
 
@@ -33,6 +39,36 @@ However, if its enclosed in paranthesis it works:
 A C++ parser would need to have type informations in order to even _parse_ such
 code correctly. I won't write a full blown C++ parser. And for this particular
 use we only need to parse the first argument and only if it is a string literal.
+
+Usage
+-----
+
+	usage: validate-gettext.py [-h] [--func-defs FUNC_DEFS] [--only-errors]
+	                           [--before LINES] [--after LINES]
+	                           [--color {always,never,auto}]
+	                           valid_keys source [source ...]
+	
+	positional arguments:
+	  valid_keys            file with known gettext string keys, one key per line
+	  source                C/C++/Objective-C source file
+	
+	optional arguments:
+	  -h, --help            show this help message and exit
+	  --func-defs FUNC_DEFS
+	                        comma separated list of function definitions:
+	                        <FUNC_NAME>[/<MIN_ARGC>-<MAX_ARGC>[/<KEY_INDEX>]] or
+	                        <FUNC_NAME>[/<MIN_ARGC>-*[/<KEY_INDEX>]] or
+	                        <FUNC_NAME>[/<ARGC>[/<KEY_INDEX>]]
+	                        
+	                        Example:
+	                        validate-gettext.py --func-defs _/1/0,gettext/1/0 ...
+	                        
+	  --only-errors         show only errors, no valid gettext invokations
+	  --before LINES        lines of context before a marked source location to show
+	  --after LINES         lines of context after a marked source location to show
+	  --color {always,never,auto}
+	                        wether to colorize the output
+
 
 TODO
 ----
