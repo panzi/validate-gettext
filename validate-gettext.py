@@ -79,6 +79,7 @@ IGNORE_TOKS = frozenset([TOK.ML_COMMENT, TOK.COMMENT, TOK.SPACE, TOK.LINE_CONT])
 
 STR_PART = re.compile(r'([^"\n\\])|\\([?"'+"'"+r'rnabfvt])|\\([0-9]{1,3})|\\x([0-9a-fA-F]{2})|\\U([0-9a-fA-F]{8})|\\u([0-9a-fA-F]{4})')
 RAW_STR  = re.compile(r'^R"([^"]*)"$')
+NON_SPACE = re.compile('[^ ]')
 
 ESC_SIMPLE = {
     "?": "?",
@@ -164,23 +165,26 @@ def parse_string(tokens):
     return ''.join(buf)
 
 class SourceMap:
-    __slots__ = 'filename', 'src_lineno', 'map_lineno'
+    # see: https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html
+    __slots__ = 'filename', 'src_lineno', 'map_lineno', 'flags'
 
-    def __init__(self, filename, src_lineno, map_lineno):
+    def __init__(self, filename, src_lineno, map_lineno, flags):
         self.filename   = filename
         self.src_lineno = src_lineno
         self.map_lineno = map_lineno
+        self.flags      = flags
 
     def pos(self, lineno):
         return (self.filename, lineno - self.src_lineno + self.map_lineno)
 
 SOURCE_MAP = re.compile(r'^#[ \t]*(\d+)[ \t]*("(?:[^"\n\\]|\\[\\?"'+"'"+
-    r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2})*")[ \t]*(?:(\d+)(?:[ \t]*(\d+))?)?')
+    r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2})*")((?:[ \t]*\d+)*)')
 
 def parse_source_map_line(lineno, src):
     m = SOURCE_MAP.match(src)
     _, filename = parse_string_token(m.group(2))
-    return SourceMap(filename, lineno + 1, int(m.group(1)))
+    flags = set(map(int, m.group(3).split()))
+    return SourceMap(filename, lineno + 1, int(m.group(1)), flags)
 
 def tokens(s):
     source_map = None
@@ -474,7 +478,23 @@ def parse_source_map(filename, lines):
             while map_line_index >= len(map_lines):
                 map_lines.append('')
             map_line = map_lines[map_line_index] # pylint: disable=E1136
-            map_lines[map_line_index] = map_line + line[len(map_line):] # pylint: disable=E1137
+
+            if map_line:
+                m = NON_SPACE.search(line)
+                if m:
+                    non_space_index = m.start()
+                    map_line_len = len(map_line)
+                    diff = map_line_len - non_space_index
+                    if diff >= 0:
+                        # Generated lines that represent one single source line overlap.
+                        # This manipulates the input lines so they don't overlap and can
+                        # be merged into one for printing.
+                        lines[i] = line = (' ' * (diff + 1)) + line
+                    map_lines[map_line_index] = map_line + line[map_line_len:] # pylint: disable=E1137
+                else:
+                    map_lines[map_line_index] = map_line # pylint: disable=E1137
+            else:
+                map_lines[map_line_index] = line # pylint: disable=E1137
 
     return map_files
 
@@ -487,6 +507,8 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
         map_files=map_files, src_files=src_files,
         before=before, after=after, color=color
     )
+    # lines might be manipulated by parse_source_map()
+    s = '\n'.join(lines)
     try:
         for ident_tok, args_tok, (min_argc, max_argc, key_index) in gettext(s, func_defs):
             args = parse_comma_list(args_tok.tokens[1:-1])
@@ -588,6 +610,16 @@ class LineInfo:
         self.ranges.append([start, end])
 
 def gather_lines(filename, toks, map_files, src_files, before=0, after=0):
+    def get_src_lines(src_filename):
+        if src_filename in src_files:
+            src_lines = src_files[src_filename]
+        else:
+            with open(src_filename) as fp:
+                src_lines = split_lines(fp.read())
+
+            src_files[src_filename] = src_lines
+        return src_lines
+
     line_infos = {}
     for tok in toks:
         if tok.source_map:
@@ -598,10 +630,11 @@ def gather_lines(filename, toks, map_files, src_files, before=0, after=0):
         start_lineno, start_column = tok.start_pos()
         end_lineno, end_column = tok.end_pos()
 
-        map_lines = map_files[map_filename]
+        src_lines = map_files[map_filename]
+        line_count = len(src_lines)
         for lineno in range(start_lineno, end_lineno + 1):
             line_index = lineno - 1
-            line = map_lines[line_index] if line_index != len(map_lines) else ''
+            line = src_lines[line_index] if line_index != line_count else ''
 
             if lineno in line_infos:
                 info = line_infos[lineno]
@@ -619,13 +652,7 @@ def gather_lines(filename, toks, map_files, src_files, before=0, after=0):
             info.add_range(start, end)
 
     for info in list(line_infos.values()):
-        if info.filename in src_files:
-            src_lines = src_files[info.filename]
-        else:
-            with open(info.filename) as fp:
-                src_lines = split_lines(fp.read())
-
-            src_files[info.filename] = src_lines
+        src_lines = get_src_lines(info.filename)
 
         if before > 0:
             for lineno in range(max(info.lineno - before, 1), info.lineno):
@@ -868,8 +895,11 @@ def main(args):
 
     status = 0
     for source in opts.source:
-        with open(source) as fp:
-            s = fp.read()
+        if source == '-':
+            s = sys.stdin.read()
+        else:
+            with open(source) as fp:
+                s = fp.read()
         if not validate_gettext(s, source, valid_keys,
                 func_defs = func_defs,
                 only_errors = opts.only_errors,
