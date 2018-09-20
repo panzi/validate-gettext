@@ -150,22 +150,19 @@ def parse_string(tokens):
     prefix = None
     for tok in tokens:
         if tok.tok != TOK.STRING:
-            raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column,
-                "string literal", find_first_atom(tok).val)
+            raise UnexpectedTokenError(tok, "string literal", find_first_atom(tok).val)
         try:
             p, val = parse_string_token(tok.val)
         except SyntaxError as e:
-            raise ParserError(tok.lineno, tok.column, tok.end_lineno, tok.end_column, str(e))
+            raise ParserError(tok, str(e))
         if prefix is None:
             prefix = p
         elif p is not None and p != prefix:
-            raise UnexpectedTokenError(tok.lineno, tok.column, tok.end_lineno, tok.end_column,
-                _prefix_msg(prefix), _prefix_msg(p))
+            raise UnexpectedTokenError(tok, _prefix_msg(prefix), _prefix_msg(p))
         buf.append(val)
     return ''.join(buf)
 
 class SourceMap:
-    # see: https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html
     __slots__ = 'filename', 'src_lineno', 'map_lineno', 'flags'
 
     def __init__(self, filename, src_lineno, map_lineno, flags):
@@ -180,23 +177,32 @@ class SourceMap:
 SOURCE_MAP = re.compile(r'^#[ \t]*(\d+)[ \t]*("(?:[^"\n\\]|\\[\\?"'+"'"+
     r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2})*")((?:[ \t]*\d+)*)')
 
-def parse_source_map_line(lineno, src):
+def parse_source_map_line(src):
+    # see: https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html
     m = SOURCE_MAP.match(src)
     _, filename = parse_string_token(m.group(2))
     flags = set(map(int, m.group(3).split()))
-    return SourceMap(filename, lineno + 1, int(m.group(1)), flags)
+    return filename, int(m.group(1)), flags
 
-def tokens(s):
-    source_map = None
+def tokenize(s, filename):
     index = 0
     n = len(s)
     lineno = 1
     column = 1
+    map_filename = filename
+    map_src_lineno = 1
+    src_lineno = 1
     while index < n:
         m = LEX.match(s, index)
 
         if not m:
-            raise UnexpectedTokenError(lineno, column, lineno, column + 1, 'a valid token', s[index:index + 1])
+            err_lineno = lineno - src_lineno + map_src_lineno
+            err_column = column
+
+            illegal = Atom(map_filename, err_lineno, err_column, err_lineno, err_column + 1,
+                TOK.ILLEGAL, s[index:index + 1])
+
+            raise UnexpectedTokenError(illegal, 'a valid token', s[index:index + 1])
 
         val = m.group(0)
         newlines = val.count("\n")
@@ -210,11 +216,12 @@ def tokens(s):
         for tok in TOKENS:
             val = m.group(tok)
             if val is not None:
-                #print(lineno, column, end_lineno, end_column, TOK(tok), repr(val))
-                atom = Atom(lineno, column, end_lineno, end_column, TOK(tok), val,
-                    source_map.pos(lineno) if source_map is not None else None)
+                diff = map_src_lineno - src_lineno
+                atom = Atom(map_filename, lineno + diff, column, end_lineno + diff, end_column, TOK(tok), val)
+
                 if atom.tok == TOK.SOURCE_MAP:
-                    source_map = parse_source_map_line(lineno, val)
+                    src_lineno = lineno + 1
+                    map_filename, map_src_lineno, _ = parse_source_map_line(val)
                 else:
                     yield atom
                 break
@@ -247,39 +254,26 @@ class Node:
     def end_column(self):
         raise NotImplementedError
 
-    def slice(self, lines):
-        return slice_lines(lines, self.lineno, self.column, self.end_lineno, self.end_column)
+    def start_pos(self):
+        return (self.lineno, self.column)
 
-    def str_slice(self, lines):
-        return ''.join(self.slice(lines))
+    def end_pos(self):
+        return (self.end_lineno, self.end_column)
 
 class Atom(Node):
-    __slots__ = 'lineno', 'column', 'end_lineno', 'end_column', 'tok', 'val', 'source_map'
+    __slots__ = 'filename', 'lineno', 'column', 'end_lineno', 'end_column', 'tok', 'val'
 
-    def __init__(self, lineno, column, end_lineno, end_column, tok, val, source_map=None):
+    def __init__(self, filename, lineno, column, end_lineno, end_column, tok, val):
+        self.filename = filename
         self.lineno = lineno
         self.column = column
         self.end_lineno = end_lineno
         self.end_column = end_column
         self.tok = tok
         self.val = val
-        self.source_map = source_map
 
     def __str__(self):
         return self.val
-
-    def start_pos(self):
-        if self.source_map:
-            return (self.source_map[1], self.column)
-        else:
-            return (self.lineno, self.column)
-
-    def end_pos(self):
-        if self.source_map:
-            _, map_lineno = self.source_map
-            return (self.end_lineno - self.lineno + map_lineno, self.end_column)
-        else:
-            return (self.end_lineno, self.end_column)
 
 class Tree(Node):
     __slots__ = 'tokens', 'tok'
@@ -308,47 +302,26 @@ class Tree(Node):
         return self.tokens[-1].end_column
 
 class ParserError(Exception):
-    def __init__(self, lineno, column, end_lineno, end_column, message):
+    def __init__(self, token, message):
         Exception.__init__(self, message)
-        self.lineno = lineno
-        self.column = column
-        self.end_lineno = end_lineno
-        self.end_column = end_column
-
-    def slice(self, lines):
-        return slice_lines(lines, self.lineno, self.column, self.end_lineno, self.end_column)
-
-    def str_slice(self, lines):
-        return ''.join(self.slice(lines))
+        self.token = token
 
 class UnexpectedTokenError(ParserError):
-    def __init__(self, lineno, column, end_lineno, end_column, expected, got):
-        ParserError.__init__(self, lineno, column, end_lineno, end_column,
-            "expected %s, but got %s" % (expected, got))
+    def __init__(self, token, expected, got):
+        ParserError.__init__(self, token, "expected %s, but got %s" % (expected, got))
         self.expected = expected
         self.got = got
 
 class UnbalancedParenthesisError(ParserError):
-    def __init__(self, lineno, column, end_lineno, end_column,
-            other_lineno, other_column, other_end_lineno, other_end_column,
-            expected, got):
-        ParserError.__init__(self, lineno, column, end_lineno, end_column,
-            "expected %s, but got %s" % (expected, got))
-        self.other_lineno = other_lineno
-        self.other_column = other_column
-        self.other_end_lineno = other_end_lineno
-        self.other_end_column = other_end_column
+    def __init__(self, token, other_token, expected, got):
+        ParserError.__init__(self, token, "expected %s, but got %s" % (expected, got))
+        self.other_token = other_token
 
-    def other_slice(self, lines):
-        return slice_lines(lines, self.other_lineno, self.other_column, self.other_end_lineno, self.other_end_column)
-
-    def other_str_slice(self, lines):
-        return ''.join(self.other_slice(lines))
-
-def parse(s):
+def parse(s, filename):
     node = Tree()
     stack = []
-    for atom in tokens(s):
+    atom = None
+    for atom in tokenize(s, filename):
         if atom.tok in IGNORE_TOKS:
             continue
 
@@ -363,18 +336,12 @@ def parse(s):
             else:
                 child = atom
                 if not node.tokens:
-                    raise ParserError(
-                        child.lineno, child.column, child.end_lineno, child.end_column,
-                        'unexpected %s' % val)
+                    raise ParserError(child, 'unexpected %s' % val)
                 other = node.tokens[0]
                 if other.tok != TOK.BRACKET:
-                    raise ParserError(
-                        child.lineno, child.column, child.end_lineno, child.end_column,
-                        'unexpected %s' % val)
+                    raise ParserError(child, 'unexpected %s' % val)
                 if val in CLOSE_BRACKETS and val != CLOSE_BRACKET_MAP[other.val]:
-                    raise UnbalancedParenthesisError(
-                        child.lineno, child.column, child.end_lineno, child.end_column,
-                        other.lineno, other.column, other.end_lineno, other.end_column,
+                    raise UnbalancedParenthesisError(child, other,
                         CLOSE_BRACKET_MAP[other.val], val)
                 node.tokens.append(child)
                 node = stack.pop()
@@ -382,14 +349,10 @@ def parse(s):
             node.tokens.append(atom)
 
     if stack:
-        lines = split_lines(s)
         tree = find_last_tree(stack[-1])
-        lineno = len(lines) + 1
-        column = len(lines[-1])
         other = tree.tokens[0]
-        raise UnbalancedParenthesisError(
-            lineno, column, lineno, column + 1,
-            other.lineno, other.column, other.end_lineno, other.end_column,
+        eof = Atom(atom.filename, atom.end_lineno, atom.end_column, atom.end_lineno, atom.end_column + 1, TOK.ILLEGAL, '')
+        raise UnbalancedParenthesisError(eof, other,
             CLOSE_BRACKET_MAP[other.val], 'end of file')
 
     return node
@@ -411,16 +374,14 @@ def parse_comma_list(tokens):
         for tok in tokens:
             if tok.tok == TOK.OPERATOR and tok.val == ',':
                 if not node.tokens:
-                    raise UnexpectedTokenError(tok.lineno, tok.column,
-                        tok.end_lineno, tok.end_column, "an expression", tok.val)
+                    raise UnexpectedTokenError(tok, "an expression", tok.val)
                 node = Tree()
                 parsed.append(node)
             else:
                 node.tokens.append(tok)
 
         if not node.tokens:
-            raise ParserError(tok.lineno, tok.column,
-                tok.end_lineno, tok.end_column, "trailing comma")
+            raise ParserError(tok, "trailing comma")
 
     return parsed
 
@@ -437,16 +398,6 @@ def join_tokens(tokens):
             i += 1
         i += 1
     return ''.join(buf)
-
-def slice_lines(lines, start_lineno, start_column, end_lineno, end_column):
-    buf = []
-    for i in range(start_lineno - 1, min(len(lines), end_lineno)):
-        if i + 1 == end_lineno:
-            buf.append(lines[i][start_column - 1 : end_column - 1])
-        else:
-            buf.append(lines[i][start_column - 1:])
-        start_column = 0
-    return buf
 
 def split_lines(s):
     if s.endswith("\n"):
@@ -510,17 +461,17 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
     # lines might be manipulated by parse_source_map()
     s = '\n'.join(lines)
     try:
-        for ident_tok, args_tok, (min_argc, max_argc, key_index) in gettext(s, func_defs):
+        for ident_tok, args_tok, (min_argc, max_argc, key_index) in find_gettext(s, filename, func_defs):
             args = parse_comma_list(args_tok.tokens[1:-1])
             argc = len(args)
             if argc < min_argc:
-                print_mark(filename, [ident_tok, *(args if args else args_tok.tokens)],
+                print_mark([ident_tok, *(args if args else args_tok.tokens)],
                     "not enough arguments (minimum are %d, but got %d)" % (min_argc, argc),
                     **opts)
                 ok = False
 
             elif max_argc is not None and argc > max_argc:
-                print_mark(filename, [ident_tok, *args[max_argc:]],
+                print_mark([ident_tok, *args[max_argc:]],
                     "too many arguments (maximum are %d, but got %d)" % (max_argc, argc),
                     **opts)
                 ok = False
@@ -531,41 +482,33 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
                     try:
                         key = parse_string(key_arg.tokens)
                     except ParserError as e:
-                        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-                        print_mark(filename, [illegal], str(e), **opts)
+                        print_mark([e.token], str(e), **opts)
                         ok = False
 
                     else:
                         if key not in valid_keys:
-                            print_mark(filename, key_arg.tokens, "not a know string key",
+                            print_mark(key_arg.tokens, "not a know string key",
                                 **opts)
                             ok = False
 
                         elif not only_errors:
-                            print_mark(filename, [ident_tok, *args_tok.tokens], "valid gettext invocation",
+                            print_mark([ident_tok, *args_tok.tokens], "valid gettext invocation",
                                 mark_color=GREEN, **opts)
                             print("\tparsed string key: %r" % key)
                             for argind, arg in enumerate(args):
                                 print("\targument %d: %s" % (argind, arg))
                             print()
                 else:
-                    print_mark(filename, key_arg.tokens, "expected a string literal",
-                        **opts)
+                    print_mark(key_arg.tokens, "expected a string literal", **opts)
                     ok = False
 
     except UnbalancedParenthesisError as e:
-        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-        print_mark(filename, [illegal], str(e), **opts)
-
-        illegal = Atom(e.other_lineno, e.other_column, e.other_end_lineno, e.other_end_column,
-            TOK.ILLEGAL, e.other_str_slice(lines))
-        print_mark(filename, [illegal], "open bracket was here",
-            **opts)
+        print_mark([e.token], str(e), **opts)
+        print_mark([e.other_token], "open bracket was here", **opts)
         ok = False
 
     except ParserError as e:
-        illegal = Atom(e.lineno, e.column, e.end_lineno, e.end_column, TOK.ILLEGAL, e.str_slice(lines))
-        print_mark(filename, [illegal], str(e), **opts)
+        print_mark([e.token], str(e), **opts)
         ok = False
 
     return ok
@@ -609,7 +552,7 @@ class LineInfo:
             i += 1
         self.ranges.append([start, end])
 
-def gather_lines(filename, toks, map_files, src_files, before=0, after=0):
+def gather_lines(toks, map_files, src_files, before=0, after=0):
     def get_src_lines(src_filename):
         if src_filename in src_files:
             src_lines = src_files[src_filename]
@@ -622,11 +565,7 @@ def gather_lines(filename, toks, map_files, src_files, before=0, after=0):
 
     line_infos = {}
     for tok in toks:
-        if tok.source_map:
-            map_filename = tok.source_map[0]
-        else:
-            map_filename = filename
-
+        map_filename = tok.filename
         start_lineno, start_column = tok.start_pos()
         end_lineno, end_column = tok.end_pos()
 
@@ -678,7 +617,7 @@ def flatten_tree(nodes):
     _flatten_tree(nodes, flat)
     return flat
 
-def print_mark(filename, toks, message, map_files, src_files, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
+def print_mark(toks, message, map_files, src_files, mark_color=RED, lineno_color=BLUE, before=0, after=0, color=True):
     if color:
         normal = NORMAL
     else:
@@ -690,13 +629,10 @@ def print_mark(filename, toks, message, map_files, src_files, mark_color=RED, li
     first_tok = toks[0]
     first_lineno, first_column = first_tok.start_pos()
 
-    if first_tok.source_map:
-        map_filename = first_tok.source_map[0]
-    else:
-        map_filename = filename
+    map_filename = first_tok.filename
 
     print("%s:%d:%d: %s" % (map_filename, first_lineno, first_column, message))
-    infos = gather_lines(filename, toks, map_files, src_files, before, after)
+    infos = gather_lines(toks, map_files, src_files, before, after)
     for info in infos:
         line = info.line
         str_lineno = str(info.lineno)
@@ -722,14 +658,14 @@ def print_mark(filename, toks, message, map_files, src_files, mark_color=RED, li
             print(''.join(buf))
     print()
 
-def gettext(s, func_defs='_'):
-    node = parse(s)
-    yield from _gettext(node, func_defs)
+def find_gettext(s, filename, func_defs):
+    node = parse(s, filename)
+    yield from _find_gettext(node, func_defs)
 
 EXPR_KEYWORDS = frozenset(['return', 'case', 'goto', 'sizeof', '__typeof__', '__typeof', 'typeof'])
 METHOD_SPECIFIERS = frozenset(['throw', 'noexcept', 'const'])
 
-def _gettext(node, func_defs):
+def _find_gettext(node, func_defs):
     i = 0
     while i < len(node.tokens):
         child = node.tokens[i]
@@ -789,7 +725,7 @@ def _gettext(node, func_defs):
                 i += 1
 
         elif child.tok == TOK.TREE:
-            yield from _gettext(child, func_defs)
+            yield from _find_gettext(child, func_defs)
         i += 1
 
 def parse_func_defs(s):

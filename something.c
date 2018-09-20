@@ -5,7 +5,7 @@
 	  "found " \
 	  "where the macro is used")
 
-const char *_(void *key, ...) { return NULL; }
+const char *_(void *key, ...) { return NULL; _() }
 const char *gettext(void *key) { return NULL; }
 
 void other() {
@@ -22,7 +22,7 @@ void main() {
 			"should be found \0 \12 \u00a0 \U0000000A \t \x20 \r\n\v\b\f", a, b, c
 	
 	);
-	printf("%s %d", FOO, 1);
+	printf("%s %d", FOO, 1, FOO);
 	puts("known");
 	puts("unknown");
 
