@@ -24,7 +24,10 @@ void main() {
 	);
 	printf("%s %d", FOO, 1, FOO);
 	puts("known");
-	puts("unknown");
+	puts(_(R"xx(
+		
+		unknown
+)xx"));
 
 	printf("%s %d %d %d", _(
 #if 0

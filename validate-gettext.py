@@ -39,11 +39,13 @@ CLOSE_BRACKETS = frozenset(CLOSE_BRACKET_MAP.values())
 #      to _parse_ such code. I won't write a full blown C++ parser.
 
 # TODO: support new C++ custom literals
+# FIXME: Raw strings work differently. R"([^\s(){}\[\]]*)\(([\n.]*?)\)\1"
 LEX = re.compile(
-    r'((?i:(?:[LuU]|u8)?"(?:[^"\n\\]|\\[\\?"'+"'"+r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*"|R"[^\n"]*"))|' + # string
+    r'((?i:(?:[LuU]|u8)?"(?:[^"\n\\]|\\[\\?"'+"'"+r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*"))|' + # string
+    r'((?i:(?:[LuU]|u8)?R"([^\s(){}\[\]]*)\((?:\n|.)*?\)\3"))|' + # raw string
     r"((?i:(?:[LuU]|u8)?'(?:[^'\n\\]|\\[\\?'"+'"'+r"rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2}|\\U[0-9a-fA-F]{8}|\\u[0-9a-fA-F]{4})*'))|" + # char (yes they can be more than on character in C)
     r'([_a-z][_a-z0-9]*)|' +        # identifier
-    r'(/\*(?:[^*]|\*(?!/))*\*/)|' +  # multiline comment
+    r'(/\*(?:[^*]|\*(?!/))*\*/)|' + # multiline comment
     r'(//[^\n]*)|' +                # single line comment
     r'([ \v\t\r\n]+)|' +            # space
     r'([-+]?[0-9]+(?:\.[0-9]*)?(?:e[-+]?[0-9]+)?i?|[-+]?0x[0-9a-f]+|[-+]?[0-9]*\.[0-9]+(?:e[-+]?[0-9]+)?i?)|' + # numbers
@@ -57,28 +59,29 @@ LEX = re.compile(
 
 class TOK(enum.IntEnum):
     STRING     =  1
-    CHAR       =  2
-    IDENT      =  3
-    ML_COMMENT =  4
-    COMMENT    =  5
-    SPACE      =  6
-    NUMBER     =  7
-    TAG        =  8
-    OPERATOR   =  9
-    BRACKET    = 10
-    SOURCE_MAP = 11
-    PREPROC    = 12
-    LINE_CONT  = 13
+    RAW_STRING =  2 # 3 is part of raw string
+    CHAR       =  4
+    IDENT      =  5
+    ML_COMMENT =  6
+    COMMENT    =  7
+    SPACE      =  8
+    NUMBER     =  9
+    TAG        = 10
+    OPERATOR   = 11
+    BRACKET    = 12
+    SOURCE_MAP = 13
+    PREPROC    = 14
+    LINE_CONT  = 15
 
     TREE    = -1
     ILLEGAL = -2
 
-TOKENS = tuple(TOK.__members__.values())
+TOKENS = tuple(tok for tok in TOK.__members__.values() if tok > 0)
 
 IGNORE_TOKS = frozenset([TOK.ML_COMMENT, TOK.COMMENT, TOK.SPACE, TOK.LINE_CONT])
 
 STR_PART = re.compile(r'([^"\n\\])|\\([?"'+"'"+r'rnabfvt])|\\([0-9]{1,3})|\\x([0-9a-fA-F]{2})|\\U([0-9a-fA-F]{8})|\\u([0-9a-fA-F]{4})')
-RAW_STR  = re.compile(r'^R"([^"]*)"$')
+RAW_STR  = re.compile(r'^([LuU]|u8)?R"([^\s(){}\[\]]*)\(((?:\n|.)*?)\)\2"$', re.M)
 NON_SPACE = re.compile('[^ ]')
 
 ESC_SIMPLE = {
@@ -109,6 +112,10 @@ def _parse_string_token_repl(m):
         return chr(int(m.group(6), 16))
     assert(False)
 
+def parse_raw_string_token(val):
+    m = RAW_STR.match(val)
+    return m.group(1), m.group(3)
+
 def parse_string_token(val):
     if not val.endswith('"'):
         # TODO: C++ custom string literals
@@ -126,8 +133,6 @@ def parse_string_token(val):
     elif val.startswith('L"'):
         prefix = 'L'
         s = val[2:-1]
-    elif val.startswith('R"'):
-        return 'R', RAW_STR.match(val).group(1)
     elif val.startswith('"'):
         prefix = None
         s = val[1:-1]
@@ -145,21 +150,25 @@ def find_first_atom(node):
     return find_first_atom(node.tokens[0])
 
 def parse_string(tokens):
-    # NOTE: this accepts concatenation of incompatible string literlas, like: L"foo" "bar"
     buf = []
     prefix = None
     for tok in tokens:
-        if tok.tok != TOK.STRING:
-            raise UnexpectedTokenError(tok, "string literal", find_first_atom(tok).val)
         try:
-            p, val = parse_string_token(tok.val)
+            if tok.tok == TOK.RAW_STRING:
+                p, val = parse_raw_string_token(tok.val)
+            elif tok.tok == TOK.STRING:
+                p, val = parse_string_token(tok.val)
+            else:
+                raise UnexpectedTokenError(tok, "string literal", find_first_atom(tok).val)
         except SyntaxError as e:
             raise ParserError(tok, str(e))
+
         if prefix is None:
             prefix = p
         elif p is not None and p != prefix:
             raise UnexpectedTokenError(tok, _prefix_msg(prefix), _prefix_msg(p))
         buf.append(val)
+
     return ''.join(buf)
 
 class SourceMap:
