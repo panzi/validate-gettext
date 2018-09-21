@@ -459,6 +459,7 @@ def parse_source_map(filename, lines):
     return map_files
 
 def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, before=0, after=0, color=True):
+    key_count = {key: 0 for key in valid_keys}
     lines = split_lines(s)
     map_files = parse_source_map(filename, lines)
     src_files = {filename: lines}
@@ -500,13 +501,15 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
                                 **opts)
                             ok = False
 
-                        elif not only_errors:
-                            print_mark([ident_tok, *args_tok.tokens], "valid gettext invocation",
-                                mark_color=GREEN, **opts)
-                            print("\tparsed string key: %r" % key)
-                            for argind, arg in enumerate(args):
-                                print("\targument %d: %s" % (argind, arg))
-                            print()
+                        else:
+                            key_count[key] += 1
+                            if not only_errors:
+                                print_mark([ident_tok, *args_tok.tokens], "valid gettext invocation",
+                                    mark_color=GREEN, **opts)
+                                print("\tparsed string key: %r" % key)
+                                for argind, arg in enumerate(args):
+                                    print("\targument %d: %s" % (argind, arg))
+                                print()
                 else:
                     print_mark(key_arg.tokens, "expected a string literal", **opts)
                     ok = False
@@ -520,7 +523,48 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
         print_mark([e.token], str(e), **opts)
         ok = False
 
+    if color:
+        normal = NORMAL
+        red = RED
+    else:
+        normal = red = ''
+
+    for key in sorted(valid_keys):
+        count = key_count[key]
+        if count == 0:
+            ok = False
+        
+            print("%sunsued string:%s %s" % (red, normal, stringify(key)))
+
     return ok
+
+def stringify(s):
+    buf = ['"']
+    for c in s.encode():
+        if c == 0:
+            buf.append('\\0')
+        elif c == 0x07:
+            buf.append('\\a')
+        elif c == 0x08:
+            buf.append('\\b')
+        if c == 0x09:
+            buf.append('\\t')
+        if c == 0x0A:
+            buf.append('\\n')
+        if c == 0x0B:
+            buf.append('\\v')
+        if c == 0x0C:
+            buf.append('\\f')
+        if c == 0x0D:
+            buf.append('\\r')
+        if c == 0x5C:
+            buf.append('\\\\')
+        elif c >= 0x20 and c <= 0x7e:
+            buf.append(chr(c))
+        else:
+            buf.append('\\x%02x' % c)
+    buf.append('"')
+    return ''.join(buf)
 
 class LineInfo:
     __slots__ = 'lineno', 'line', 'filename', 'ranges'
@@ -822,7 +866,14 @@ def main(args):
     opts = parser.parse_args(args)
 
     with open(opts.valid_keys) as fp:
-        valid_keys = set(line.rstrip('\n') for line in fp)
+        data = fp.read()
+
+    key_filename = opts.valid_keys.lower()
+    if key_filename.endswith('.po') or key_filename.endswith('.pot'):
+        strs = parse_po(data, opts.valid_keys.lower())
+        valid_keys = set(strs.keys())
+    else:
+        valid_keys = set(data.split('\n'))
 
     if '' in valid_keys:
         valid_keys.remove('')
@@ -853,6 +904,86 @@ def main(args):
                 color = color):
             status = 1
     return status
+
+PO_LEX = re.compile(
+    r'^([_a-zA-Z0-9][_a-zA-Z0-9]*)(?:\[(\d+|N)\])?\s*("(?:[^\\]|\\[\\nrtvabf"]|\\x[0-9a-fA-F]{2})*")\s*$|' # command
+    r'^("(?:[^\\]|\\[\\nrtvabf"]|\\x[0-9a-fA-F]{2})*")\s*$|' # multiline continuation
+    r'^(\s*)$|' # empty line
+    r'^(#.*)$', # comment
+    re.M
+)
+
+PO_COMMAND   = 1
+PO_INDEX     = 2
+PO_STR       = 3
+PO_MULTI_STR = 4
+PO_EMPTY     = 5
+PO_COMMENT   = 6
+
+def parse_po(s, filename):
+    strs = {}
+    msgid = None
+    msgid_plural = None
+    msgstr = {}
+    key = None
+    for i, line in enumerate(s.split("\n")):
+        line = line.strip()
+        m = PO_LEX.match(line)
+        if not m:
+            print("%s:%d: failed to parse line" % (filename, i + 1))
+            print(line)
+            continue
+        
+        cmd = m.group(PO_COMMAND)
+        if cmd:
+            if cmd == 'msgid':
+                if msgid is not None:
+                    strs[msgid] = (msgid_plural, msgstr)
+
+                msgid = parse_string_token(m.group(PO_STR))[1]
+                msgid_plural = None
+                msgstr = {}
+
+                key = 'msgid'
+            elif cmd == 'msgid_plural':
+                val = parse_string_token(m.group(PO_STR))[1]
+                if msgid_plural is None:
+                    msgid_plural = val
+                else:
+                    msgid_plural += val
+                key = 'msgid_plural'
+            elif cmd == 'msgstr':
+                index = m.group(PO_INDEX)
+                if index is None:
+                    key = None
+                elif index == 'N':
+                    key = 'N'
+                else:
+                    key = int(index)
+                msgstr[key] = parse_string_token(m.group(PO_STR))[1]
+            elif cmd == 'msgctxt':
+                pass
+        elif m.group(PO_MULTI_STR):
+            val = parse_string_token(m.group(PO_MULTI_STR))[1]
+            if key == 'msgid':
+                msgid += val
+            elif key == 'msgid_plural':
+                msgid_plural += val
+            elif key == 'msgid_plural':
+                msgid_plural += val
+            elif key in msgstr:
+                msgstr[key] += val
+            else:
+                msgstr[key] = val
+        elif m.group(PO_COMMENT):
+            pass
+        elif m.group(PO_EMPTY):
+            pass
+
+    if msgid is not None:
+        strs[msgid] = (msgid_plural, msgstr)
+    
+    return strs
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))

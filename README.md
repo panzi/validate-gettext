@@ -69,9 +69,10 @@ Usage
 	  --color {always,never,auto}
 	                        wether to colorize the output
 
-
 TODO
 ----
+
+Support ngettext (plural argument).
 
 Support digraphs. Won't ever support trigraphs.
 
