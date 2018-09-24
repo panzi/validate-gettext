@@ -818,7 +818,7 @@ def parse_func_defs(s):
     return func_defs
 
 def main(args):
-    import argparse
+    import argparse, subprocess
 
     parser = argparse.ArgumentParser(
         prog='validate-gettext.py',
@@ -830,7 +830,7 @@ def main(args):
     parser.add_argument('source', nargs='+',
         help='C/C++/Objective-C source file')
 
-    parser.add_argument('--func-defs', default='_/1/0,gettext/1/0',
+    parser.add_argument('-f', '--func-defs', default='_/1/0,gettext/1/0',
         help='comma separated list of function definitions:\n'
             '<FUNC_NAME>[/<MIN_ARGC>-<MAX_ARGC>[/<KEY_INDEX>]] or\n'
             '<FUNC_NAME>[/<MIN_ARGC>-*[/<KEY_INDEX>]] or\n'
@@ -839,17 +839,20 @@ def main(args):
             'Example:\n'
             'validate-gettext.py --func-defs _/1/0,gettext/1/0 ...\n\n')
 
-    parser.add_argument('--only-errors', default=False, action='store_true',
+    parser.add_argument('-e', '--only-errors', default=False, action='store_true',
         help='show only errors, no valid gettext invokations')
 
-    parser.add_argument('--before', type=int, default=0, metavar='LINES',
+    parser.add_argument('-b', '--before', type=int, default=0, metavar='LINES',
         help='lines of context before a marked source location to show')
 
-    parser.add_argument('--after', type=int, default=0, metavar='LINES',
+    parser.add_argument('-a', '--after', type=int, default=0, metavar='LINES',
         help='lines of context after a marked source location to show')
 
-    parser.add_argument('--color', choices=['always', 'never', 'auto'], default='auto',
+    parser.add_argument('-c', '--color', choices=['always', 'never', 'auto'], default='auto',
         help='wether to colorize the output')
+
+    parser.add_argument('-P', '--preproc', help='pass source through a preprocessor')
+    parser.add_argument('-A', '--preproc-arg', action="append")
 
     opts = parser.parse_args(args)
 
@@ -877,11 +880,32 @@ def main(args):
         print(e)
         return 2
 
+    if color:
+        normal = NORMAL
+        red = RED
+        green = GREEN
+        cyan = CYAN
+    else:
+        normal = red = green = cyan = ''
+
     status = 0
     sum_key_count = collections.defaultdict(int)
+    print_names = len(opts.source) > 1
     for source in opts.source:
-        if source == '-':
+        if print_names:
+            print("%s%s%s" % (cyan, source, normal))
+        if opts.preproc:
+            cmd = [opts.preproc]
+            if opts.preproc_arg:
+                cmd.extend(opts.preproc_arg)
+            cmd.append(source)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+            s = proc.stdout.read().decode()
+            source = '<stdin>'
+
+        elif source == '-':
             s = sys.stdin.read()
+            source = '<stdin>'
         else:
             with open(source) as fp:
                 s = fp.read()
@@ -898,12 +922,6 @@ def main(args):
 
         if not ok:
             status = 1
-
-    if color:
-        normal = NORMAL
-        red = RED
-    else:
-        normal = red = ''
 
     for key, val in sum_key_count.items():
         if val == 0:
