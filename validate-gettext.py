@@ -4,6 +4,7 @@ import re
 import sys
 import enum
 import string
+import collections
 
 RED     = "\x1b[31m"
 GREEN   = "\x1b[32m"
@@ -523,20 +524,7 @@ def validate_gettext(s, filename, valid_keys, func_defs, only_errors=False, befo
         print_mark([e.token], str(e), **opts)
         ok = False
 
-    if color:
-        normal = NORMAL
-        red = RED
-    else:
-        normal = red = ''
-
-    for key in sorted(valid_keys):
-        count = key_count[key]
-        if count == 0:
-            ok = False
-        
-            print("%sunsued string:%s %s" % (red, normal, stringify(key)))
-
-    return ok
+    return ok, key_count
 
 def stringify(s):
     buf = ['"']
@@ -890,19 +878,37 @@ def main(args):
         return 2
 
     status = 0
+    sum_key_count = collections.defaultdict(int)
     for source in opts.source:
         if source == '-':
             s = sys.stdin.read()
         else:
             with open(source) as fp:
                 s = fp.read()
-        if not validate_gettext(s, source, valid_keys,
+
+        ok, key_count = validate_gettext(s, source, valid_keys,
                 func_defs = func_defs,
                 only_errors = opts.only_errors,
                 before = opts.before,
                 after = opts.after,
-                color = color):
+                color = color)
+
+        for key, val in key_count.items():
+            sum_key_count[key] += val
+
+        if not ok:
             status = 1
+
+    if color:
+        normal = NORMAL
+        red = RED
+    else:
+        normal = red = ''
+
+    for key, val in sum_key_count.items():
+        if val == 0:
+            print("%sunused string:%s %s" % (red, normal, stringify(key)))
+
     return status
 
 PO_LEX = re.compile(
