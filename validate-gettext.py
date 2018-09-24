@@ -901,6 +901,8 @@ def main(args):
             cmd.append(source)
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
             s = proc.stdout.read().decode()
+            if proc.wait() != 0:
+                return 1
             source = '<stdin>'
 
         elif source == '-':
