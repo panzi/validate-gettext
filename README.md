@@ -11,7 +11,12 @@ If you do fancy things with macros you might need to pass your source through
 macro expansion first. This tool will be able to read the source line markers
 and show you the issues in the actual source locations.
 
-	gcc -E -I/include/path source.c | ./validate-gettext.py known_strings.txt -
+	 ./validate-gettext.py known_strings.txt -P gcc -A=-E -A=-I/include/path source.c
+
+You can of course also pipe the output of the preprocessor into this script,
+but letting the script run the preprocessor makes it possible for it to only
+show you the string keys that aren't used in *any* of the source files, in
+case you have multiple source files.
 
 Note
 ----
