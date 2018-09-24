@@ -676,7 +676,7 @@ def print_mark(toks, message, map_files, src_files, mark_color=RED, lineno_color
     else:
         mark_color = lineno_color = normal = ""
     toks = flatten_tree(toks)
-    last_lineno, _ = toks[-1].start_pos()
+    last_lineno, _ = toks[-1].end_pos()
     line_padd = 1 + len(str(last_lineno))
 
     first_tok = toks[0]
