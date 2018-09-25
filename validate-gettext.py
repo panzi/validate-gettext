@@ -172,18 +172,6 @@ def parse_string(tokens):
 
     return ''.join(buf)
 
-class SourceMap:
-    __slots__ = 'filename', 'src_lineno', 'map_lineno', 'flags'
-
-    def __init__(self, filename, src_lineno, map_lineno, flags):
-        self.filename   = filename
-        self.src_lineno = src_lineno
-        self.map_lineno = map_lineno
-        self.flags      = flags
-
-    def pos(self, lineno):
-        return (self.filename, lineno - self.src_lineno + self.map_lineno)
-
 SOURCE_MAP = re.compile(r'^#[ \t]*(\d+)[ \t]*("(?:[^"\n\\]|\\[\\?"'+"'"+
     r'rnabfvt]|\\[0-9]{1,3}|\\x[0-9a-fA-F]{2})*")((?:[ \t]*\d+)*)')
 
